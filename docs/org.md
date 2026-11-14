@@ -52,7 +52,9 @@ a resume, a hop, a wake, a fork or a recovery stays in it because
 `placement()` only offers accounts of the scope it is asked for, and every
 caller asks for the session's own. A start says `scope` (`--org` /
 `--personal`, the dialog's Personal / Plaibook); without it, its parent's;
-without a parent, `settings.scope` (`agentbox org default org|personal`). A
+without a parent, `settings.scope` (`agentbox org default org|personal`);
+but one started on an account named by hand that the inherited scope may
+not run on takes that account's scope. A
 schedule keeps the scope it was made with, or takes the default when it
 starts. A session started outside agentbox is personal, unless its home is
 the pool's mirror of someone else's login. `agentbox org scope

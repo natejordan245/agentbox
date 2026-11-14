@@ -3096,7 +3096,11 @@ export class Fleet extends EventEmitter {
     // A session started from another runs where that one does: a subagent of
     // an org session draws on the org, not on you.
     const parentId = req.parent ?? (req.callerPid ? this.callerOf(req.callerPid) : null);
-    const scope = req.scope ?? (parentId ? getSessionRecord(parentId)?.scope : undefined) ?? settings.scope;
+    // An account named by hand, where the scope is only inherited, picks the
+    // scope too: in its parent's it would not be on offer at all.
+    const inherited = (parentId ? getSessionRecord(parentId)?.scope : undefined) ?? settings.scope;
+    const own = req.accountId && req.accountId !== "auto" ? this.scopesOf(req.accountId) : [];
+    const scope = req.scope ?? (own.length && !own.includes(inherited) ? own[0]! : inherited);
     if (scope === "org" && !readOrg()) throw new FleetError(409, "this machine is in no org: agentbox org join <invite>");
     const placement = this.placement(req.provider, req.model, req.accountId, effort, true, scope);
     if (!placement.accountId) throw new FleetError(409, placement.why, placement);
