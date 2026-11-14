@@ -54,7 +54,8 @@ const omp: AcpBackend = {
   // opencode.ai asks for a conversation id on every request; omp maps this
   // variable onto that header (~/.omp/agent/models.yml). The agent's name is
   // stable across a park and a resume, so one conversation keeps one id.
-  env: (agentName) => ({ AGENTBOX_OMP_SESSION: agentName }),
+  // MALLOC_ARENA_MAX as for a session (providers/omp.ts OMP_MALLOC).
+  env: (agentName) => ({ MALLOC_ARENA_MAX: "2", AGENTBOX_OMP_SESSION: agentName }),
   systemPromptFlag: true,
   mode: () => null,
 };

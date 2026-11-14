@@ -821,6 +821,10 @@ function commonFlags(opts: { cwd: string; briefingFile?: string; model?: string;
   return a;
 }
 
+/** omp's native addon (~40 tokio threads, plus in-process bash) otherwise grows
+ *  one glibc malloc arena per thread: 200+ MB of a long-running omp. */
+const OMP_MALLOC = { MALLOC_ARENA_MAX: "2" };
+
 /** omp's data dir is the same for every account; what differs is the
  *  service's credential (accounts/services.ts). `~/.omp/agent/models.yml`
  *  points omp's Go blocks at the bridge and sends `OPENCODE_GO_API_KEY` as
@@ -837,9 +841,9 @@ function ompAccountCommand(account: Pick<Account, "id" | "provider" | "home">): 
   const svc = serviceOf(account);
   if (svc?.login === "api-key" && svc.keyEnv) {
     const key = readApiKey(account.home)?.key;
-    return key ? { env: { [svc.keyEnv]: key }, secret: [svc.keyEnv], unset: ompRedirectVars() } : { env: {}, unset: ompRedirectVars() };
+    return key ? { env: { ...OMP_MALLOC, [svc.keyEnv]: key }, secret: [svc.keyEnv], unset: ompRedirectVars() } : { env: { ...OMP_MALLOC }, unset: ompRedirectVars() };
   }
-  return { env: { OPENCODE_GO_API_KEY: `${GO_ACCOUNT_BEARER}${account.id}` }, unset: ompRedirectVars() };
+  return { env: { ...OMP_MALLOC, OPENCODE_GO_API_KEY: `${GO_ACCOUNT_BEARER}${account.id}` }, unset: ompRedirectVars() };
 }
 
 /** The model omp's config gives a session started without one: `modelRoles.default`. */
