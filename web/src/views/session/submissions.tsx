@@ -56,7 +56,7 @@ async function submit(p: PendingSend): Promise<void> {
 async function settle(p: PendingSend, receipt: SendReceipt): Promise<void> {
   if (receipt.state === "sent") {
     // The timeline's Sending… bubble carries it until the transcript has it.
-    if (p.kind !== "btw" && p.body.trim()) echoSent(p.id, p.sessionId, p.body);
+    if (p.kind !== "btw" && p.body.trim()) echoSent(p.id, p.sessionId, p.body, p.at);
     await forgetPending(p.sessionId, p.id);
   } else if (receipt.state === "failed" || receipt.state === "unconfirmed") {
     if (receipt.state === "unconfirmed" && (await inTranscript(p))) await forgetPending(p.sessionId, p.id);
@@ -86,11 +86,15 @@ async function inTranscript(p: PendingSend): Promise<boolean> {
 }
 
 async function check(p: PendingSend): Promise<void> {
-  if (active.has(p.id) || p.state === "failed") return;
+  if (active.has(p.id)) return;
+  // What is stored here is a copy of agentbox's word, and the receipt is
+  // that word: it outranks whatever this browser last concluded.
   const receipt = await api.submission(p.sessionId, p.id);
   if (receipt) return settle(p, receipt);
   // agentbox answers and has no receipt: it never got the message, since
-  // the receipt is written before anything is typed.
+  // the receipt is written before anything is typed. One it refused, or
+  // that waited too long, stays as it is.
+  if (p.state !== "pending") return;
   if (Date.now() - p.at < RESEND_MS) return attempt(p);
   await updatePending(p.id, { state: "failed", error: "agentbox was out of reach for over two minutes" });
 }

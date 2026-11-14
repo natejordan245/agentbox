@@ -80,7 +80,9 @@ const loadMock = (): Promise<MockModule> => (mockModule ??= import("./mock"));
 
 type Method = "GET" | "POST" | "PUT" | "PATCH" | "DELETE";
 
-/** The request got no answer: agentbox is down, restarting, or out of reach. */
+/** The request got no answer from agentbox: it is down, restarting or out of
+ *  reach, the answer was cut off on its way, or something else answered in
+ *  its place. It says nothing about whether the request was carried out. */
 export class Unreachable extends Error {}
 
 export async function request<T>(method: Method, path: string, body?: unknown, signal?: AbortSignal): Promise<T> {
@@ -96,21 +98,24 @@ export async function request<T>(method: Method, path: string, body?: unknown, s
   if (body !== undefined) headers["content-type"] = "application/json";
 
   let res: Response;
+  let text: string;
   try {
     res = await fetch(path, { method, headers, body: body === undefined ? undefined : JSON.stringify(body), signal });
+    // The body is part of the answer: a timeout or a dropped connection
+    // after the headers is no more an answer than one before them.
+    text = await res.text();
   } catch (err) {
     // A dead server is the common case for a local tool; say which call died.
     throw new Unreachable(`${path}: cannot reach agentbox (${(err as Error).message})`);
   }
 
-  const text = await res.text();
   let env: { ok?: boolean; data?: unknown; error?: string };
   try {
     env = JSON.parse(text) as typeof env;
   } catch {
     // Non-JSON means a proxy or a crash page, not our server. Keep the body:
     // it is usually the only description of what actually went wrong.
-    throw new Error(`${path}: ${res.status} ${res.statusText} — ${text.slice(0, 200)}`);
+    throw new Unreachable(`${path}: ${res.status} ${res.statusText} — ${text.slice(0, 200)}`);
   }
   if (!env.ok) throw new Error(env.error || `${path}: ${res.status} ${res.statusText}`);
   return env.data as T;

@@ -20,8 +20,10 @@ const DROP = "agentbox:sent-dropped";
 /** An agent that has not recorded it after this long is not going to by itself. */
 export const ECHO_TTL_MS = 120_000;
 
-export function echoSent(id: string, sessionId: string, text: string): void {
-  dispatchEvent(new CustomEvent<Echo>(EVENT, { detail: { id, sessionId, text, at: Date.now() } }));
+/** `at` is when it was sent, not when agentbox confirmed it: the agent can
+ *  have recorded it long before a slow confirmation is heard. */
+export function echoSent(id: string, sessionId: string, text: string, at: number): void {
+  dispatchEvent(new CustomEvent<Echo>(EVENT, { detail: { id, sessionId, text, at } }));
 }
 
 export function dropEcho(id: string): void {
