@@ -3650,7 +3650,6 @@ export class Fleet extends EventEmitter {
    */
   private typeFirstPrompt(id: string, pane: string, prompt: string): void {
     void this.serial(id, async () => {
-      await this.untilReady(id);
       await this.untilSettled(id, pane);
       await this.typeInto(id, this.get(id).provider, pane, prompt);
     }).catch((e) => console.error(`agentbox: typing ${id}'s prompt into it failed:`, e));
@@ -3829,7 +3828,6 @@ export class Fleet extends EventEmitter {
       // Back already — an earlier message resumed it, and the board lags
       // a pass behind.
       if (rec?.tmux && (await this.paneAlive(rec.tmux))) {
-        await this.untilReady(id);
         if (s.provider === "claude") await this.clearBtw(id, rec.tmux);
         await this.clearLimitDialog(s.provider, rec.tmux);
         attempt?.();
@@ -3846,7 +3844,6 @@ export class Fleet extends EventEmitter {
     if (s.host !== "tmux" || !s.tmux) {
       throw new FleetError(409, "running in another terminal — adopt it to type here");
     }
-    await this.untilReady(id);
     if (s.provider === "claude") await this.clearBtw(id, s.tmux);
     await this.clearLimitDialog(s.provider, s.tmux);
     attempt?.();
@@ -3880,28 +3877,6 @@ export class Fleet extends EventEmitter {
       409,
       "typed and queued, but the pane never took the flush Enter (a dialog may be up) — do not send again; press Enter there or clear the pane",
     );
-  }
-
-  /**
-   * A TUI started moments ago drops what is typed before it is up. Wait —
-   * at most 30s from its start — until its process is seen (Claude writes
-   * its session file once running), and a moment more.
-   */
-  private async untilReady(id: string): Promise<void> {
-    const started = this.startedAt.get(id);
-    if (!started) return;
-    const rec = getSessionRecord(id);
-    if (!rec?.agentSessionId) return; // nothing to watch for (a fresh codex or devin)
-    const key = `${rec.provider}:${rec.agentSessionId}`;
-    while (this.now() - started < 30_000) {
-      const p = this.live.get(key);
-      if (p && p.startedAt >= started - 5_000) {
-        if (this.now() - started < 8_000) await Bun.sleep(1_500);
-        return;
-      }
-      await Bun.sleep(500);
-      await this.tick();
-    }
   }
 
   /** What the session's terminal shows now, as plain text. */
@@ -4031,7 +4006,6 @@ export class Fleet extends EventEmitter {
       }
       const pane = s.tmux ?? getSessionRecord(id)?.tmux;
       if (!pane) throw new FleetError(409, "not running in agentbox");
-      await this.untilReady(id);
       if (this.startedAt.has(id)) await this.untilSettled(id, pane);
       if (s.provider === "claude") await this.clearBtw(id, pane);
       await this.clearLimitDialog(s.provider, pane);
@@ -4111,7 +4085,6 @@ export class Fleet extends EventEmitter {
     await this.tick();
     const pane = tmuxName(newId);
     await this.serial(newId, async () => {
-      await this.untilReady(newId);
       await this.untilSettled(newId, pane);
       await this.typeInto(newId, rec.provider, pane, text);
     }).catch((e) => {
@@ -4149,7 +4122,6 @@ export class Fleet extends EventEmitter {
       if (!leaf) throw new FleetError(409, "that version is not in the transcript");
       rw.pointAt(transcriptFile(rec.transcriptPath), rec.agentSessionId, leaf);
       if (s.host === "tmux" && s.tmux) {
-        await this.untilReady(id);
         await this.typeInto(id, s.provider, s.tmux, rw.reload(rec.agentSessionId));
       }
     });

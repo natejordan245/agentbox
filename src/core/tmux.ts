@@ -297,18 +297,21 @@ export class Unsubmitted extends Error {}
  * Enter pressed again while the draft still sits there; a draft that outlasts
  * them throws `Unsubmitted`, so nothing reports a message sent that was only typed.
  *
- * tmux brackets a paste only for a pane that asked for it, and turns each
- * line break of an unbracketed one into Enter: a multi-line message pasted
- * before the TUI turned bracketed paste on goes out as one message per line,
- * so one waits for the pane to ask. tmux before 3.5 cannot say whether it
- * has (no `bracket_paste_flag`), and there the paste goes in at once.
+ * Nothing is typed until the TUI has turned bracketed paste on, which it does
+ * as it starts reading its terminal. Before that the terminal is still in
+ * line mode: it echoes the paste itself, so the pane seems to show the
+ * draft, and holds the paste and the Enter until the TUI reads them in one
+ * gulp and takes the Enter as part of the paste. A Claude resumed on a long
+ * transcript is up only seconds after its process. (tmux also turns each line
+ * break of an unbracketed paste into Enter.) tmux before 3.5 cannot say
+ * (no `bracket_paste_flag`), and there the paste goes in at once.
  *
  * With `pieces` (`ProviderAdapter.pasteInPieces`), the message goes in as many
  * small pastes, with the line breaks pressed as keys: see `pasteInPieces`.
  */
 export async function sendText(name: string, text: string, opts: { pieces?: number } = {}): Promise<void> {
-  if (!opts.pieces && /[\r\n]/.test(text) && !(await bracketedPasteOn(name))) {
-    throw new Unsubmitted(`its pane did not turn bracketed paste on in ${STARVED_WAIT_MS / 1000}s, so nothing was typed: each line would have gone out as a message of its own`);
+  if (!(await bracketedPasteOn(name))) {
+    throw new Unsubmitted(`its TUI did not turn bracketed paste on in ${STARVED_WAIT_MS / 1000}s, so it is not reading its terminal and nothing was typed`);
   }
   const before = screenRows(name);
   if (opts.pieces) pasteInPieces(name, text, opts.pieces);
