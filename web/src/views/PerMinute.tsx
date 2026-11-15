@@ -15,6 +15,9 @@ import "./insights.css";
 const PART: Record<MinutePart, string> = { all: "All tokens", input: "Uncached input", output: "Output" };
 const PARTS: MinutePart[] = ["all", "input", "output"];
 
+/** "70k", not "70.0k". */
+const fmt = (n: number) => fmtTokens(n).replace(/\.0(?=[kM]$)/, "");
+
 function burstText(b: MinuteLimit["burst"]): string {
   if (!b) return "";
   if (b.state === "ready") return "reserve full";
@@ -36,7 +39,7 @@ export function MinuteMeter({ perMinute }: { perMinute: NonNullable<AccountUsage
             <div className="ubar-head">
               <span className="ubar-label">{label}</span>
               <span className="ubar-pct">
-                {fmtTokens(used)} <span className="ubar-claim">of {fmtTokens(l.limit).replace(/\.0(?=[kM]$)/, "")}</span>
+                {fmt(used)} <span className="ubar-claim">of {fmt(l.limit)}</span>
               </span>
               <span className="ubar-reset">{burstText(l.burst)}</span>
             </div>
@@ -117,7 +120,7 @@ export function MinuteHistory({ accountId }: { accountId: string }) {
               const x = shown.series[p];
               if (x.cap === null) return null;
               const peak = fmtTokens(Math.max(...x.peak));
-              const cap = fmtTokens(x.cap).replace(/\.0(?=[kM]$)/, "");
+              const cap = fmt(x.cap);
               const of = `${x.over.toLocaleString()} of ${shown.minutes.toLocaleString()} minutes (${Math.round((x.over / shown.minutes) * 100)}%)`;
               return (
                 <li key={p} title={p === "all" ? ALL_WHY : undefined}>
@@ -174,7 +177,8 @@ function Chart({ data }: { data: MinuteUsage }) {
   for (let i = 0; i < n; i++) {
     const t = data.from + i * data.step;
     const d = new Date(t);
-    if (data.step < 3_600_000 ? d.getMinutes() % 15 === 0 : d.getHours() === 0) {
+    // A label needs room before the right edge.
+    if ((data.step < 3_600_000 ? d.getMinutes() % 15 === 0 : d.getHours() === 0) && PAD.left + i * band + 48 < width) {
       marks.push({ i, label: data.step < 3_600_000 ? TIME_FMT.format(t) : DAY_FMT.format(t) });
     }
   }
