@@ -145,11 +145,13 @@ export function openAsks(): Map<string, string[]> {
 }
 
 /** The card the ask a session's last turn ended on (`STATUS: needs …`) makes;
- *  null when it ended on none. Its `lastMessage` is only the end of the
- *  message: the words above the line are for the caller to put in `long`. */
+ *  null when it ended on none, or on one that names a card: that card is the
+ *  question, whoever's it is, and a second card for it is a duplicate. Its
+ *  `lastMessage` is only the end of the message: the words above the line are
+ *  for the caller to put in `long`. */
 function askOf(s: Session): NewCard | null {
   const status = turnStatus(s.lastMessage);
-  if (status?.kind !== "needs") return null;
+  if (status?.kind !== "needs" || /\bcards?\s+#?\d+/i.test(status.text)) return null;
   const ask = status.text.replace(/^needs\s+\S+[\s—:–-]*/i, "") || status.text;
   return {
     kind: "decision",
