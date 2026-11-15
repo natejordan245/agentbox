@@ -299,7 +299,9 @@ export class Unsubmitted extends Error {}
  *
  * tmux brackets a paste only for a pane that asked for it, and turns each
  * line break of an unbracketed one into Enter: a multi-line message pasted
- * before the TUI turned bracketed paste on goes out as one message per line.
+ * before the TUI turned bracketed paste on goes out as one message per line,
+ * so one waits for the pane to ask. tmux before 3.5 cannot say whether it
+ * has (no `bracket_paste_flag`), and there the paste goes in at once.
  *
  * With `pieces` (`ProviderAdapter.pasteInPieces`), the message goes in as many
  * small pastes, with the line breaks pressed as keys: see `pasteInPieces`.
@@ -350,7 +352,8 @@ async function bracketedPasteOn(name: string): Promise<boolean> {
   const deadline = Date.now() + STARVED_WAIT_MS;
   for (;;) {
     const r = await tmuxAsync(["display-message", "-p", "-t", `=${name}:`, "#{bracket_paste_flag}"]);
-    if (r.stdout.trim() === "1") return true;
+    const flag = r.stdout.trim();
+    if (flag === "1" || (r.code === 0 && flag === "")) return true;
     if (r.code !== 0 || Date.now() >= deadline) return false;
     await Bun.sleep(250);
   }
