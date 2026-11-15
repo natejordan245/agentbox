@@ -294,6 +294,71 @@
   opacity: 0.6;
 }
 
+/* Tokens a minute against a per-minute cap (PerMinute.tsx). */
+.pm {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  border-top: 1px solid var(--border);
+  padding-top: 8px;
+  min-width: 0;
+}
+.pm-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+.pm-title {
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--muted);
+}
+.pm .seg button {
+  min-height: 24px;
+  padding: 0 9px;
+  font-size: 12px;
+}
+.pm-lines {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  font-size: 12px;
+  line-height: 1.5;
+  color: var(--muted);
+}
+.pm-lines > li {
+  display: flex;
+  align-items: baseline;
+}
+.pm-lines .ins-key {
+  flex: none;
+}
+.pm-key-hit {
+  background: var(--danger);
+  border-radius: 50%;
+}
+.pm-chart {
+  position: relative;
+  min-width: 0;
+}
+.pm-line {
+  fill: none;
+  stroke: var(--c);
+  stroke-width: 2;
+  stroke-linejoin: round;
+  stroke-linecap: round;
+}
+.pm-cap {
+  stroke: var(--text);
+  stroke-opacity: 0.55;
+  stroke-width: 1;
+  stroke-dasharray: 4 3;
+  shape-rendering: crispEdges;
+}
+
 .ac-usage-foot {
   display: flex;
   align-items: center;

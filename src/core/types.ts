@@ -151,6 +151,43 @@ export interface AccountUsage {
   /** Codex and Claude: usage-limit resets left to spend (docs/v2.md, Usage).
    *  Absent for every other provider, and on readings that never carried one. */
   resets?: ResetCredits | null;
+  /** A service that caps tokens per minute (Morph): its caps for one model
+   *  and what was left of them, as its last reply said. */
+  perMinute?: { model: string; limits: MinuteLimit[] } | null;
+}
+
+/** One per-minute token cap, as the service's reply headers state it. */
+export interface MinuteLimit {
+  /** Uncached input or output: cached input counts toward neither. */
+  part: "input" | "output";
+  /** Tokens a minute. */
+  limit: number;
+  /** Of this minute's. */
+  remaining: number;
+  /** The reserve drawn on once a minute's run out, refilled over half an
+   *  hour: "ready" (full), "active" (being drawn on) or "refilling". */
+  burst: { state: string; remaining: number; resetsAt: number | null } | null;
+}
+
+/** An account's tokens a minute against its per-minute caps, over the last
+ *  hour or week (`GET /api/accounts/:id/minutes`), from the token totals
+ *  Fleet samples per session. */
+export interface MinuteUsage {
+  accountId: string;
+  from: number;
+  to: number;
+  /** A bucket's length: a minute over an hour, an hour over a week. */
+  step: number;
+  /** Per bucket, in tokens a minute: the average over it and its busiest
+   *  minute (the same, for a bucket of one minute). */
+  buckets: { input: number; output: number; inputPeak: number; outputPeak: number }[];
+  /** The caps as last read; null before a reading named them. */
+  limits: { model: string; input: number; output: number } | null;
+  /** Minutes over each cap, of `minutes`. */
+  over: { input: number; output: number };
+  minutes: number;
+  /** When a turn stopped on a rate limit (a 429 its CLI gave up retrying). */
+  hits: number[];
 }
 
 /** Credential health as far as we can tell without refreshing anything. */

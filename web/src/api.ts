@@ -19,6 +19,7 @@ import type {
   AppState,
   BalancerSettings,
   CalibrationReport,
+  MinuteUsage,
   UsageInsights,
   ClientMessage,
   Closed,
@@ -391,6 +392,8 @@ export const api = {
   calibration: (days = 7) => get<CalibrationReport>(`/api/calibration?days=${days}`),
   /** Reads the account's transcripts: seconds the first time, then only what was appended. */
   insights: (id: string, days = 7) => get<UsageInsights>(`/api/accounts/${enc(id)}/insights?days=${days}`),
+  /** Tokens a minute against the account's per-minute caps (Morph). */
+  minutes: (id: string, span: "hour" | "week") => get<MinuteUsage>(`/api/accounts/${enc(id)}/minutes?span=${span}`),
 
   // settings
   /** Deep-merges server-side, so a partial is a patch, not a replacement. */

@@ -49,6 +49,11 @@ export interface ModelService {
   keyEnv?: string;
   /** api-key: a GET that answers 200 to a good key and 401 to a bad one. */
   keyCheck?: string;
+  /** api-key: a service that caps tokens per minute and states the caps on
+   *  every reply. A usage reading is a one-token chat completion of `model`
+   *  at `url`, whose `<prefix>{uncached-input,output}-{limit,remaining}` and
+   *  `-burst{,-remaining,-reset}` headers are `AccountUsage.perMinute`. */
+  meter?: { url: string; model: string; prefix: string };
   /** Whether it meters a plan in windows the balancer weighs. Sessions on one
    *  that does not claim nothing. */
   metered: boolean;
@@ -74,9 +79,11 @@ export const SERVICES: readonly ModelService[] = [
     keyEnv: "MORPH_API_KEY",
     keyCheck: "https://api.morphllm.com/v1/models",
     metered: false,
-    // Morph caps uncached input and output tokens per minute per model, and
-    // reports neither the cap nor what is left of it (no header, no endpoint).
-    limits: "No daily or weekly limit. Tokens are capped per minute; Morph does not say how much of the minute is left.",
+    // Ultra caps uncached input and output tokens per minute per model, with
+    // a burst reserve beyond that; every reply's x-morph-ultra-* headers say
+    // what is left. The default model's are the ones read.
+    meter: { url: "https://api.morphllm.com/v1/chat/completions", model: "morph-dsv41flash", prefix: "x-morph-ultra-" },
+    limits: "No daily or weekly limit. Tokens are capped per minute.",
     limitHoldMs: 60_000,
   },
 ];

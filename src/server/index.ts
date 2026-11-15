@@ -33,6 +33,7 @@ import * as tmux from "../core/tmux";
 import { attentionOf, byAttention, retrying } from "../core/attention";
 import { calibrate } from "../core/calibration";
 import { usageInsights } from "../core/insights";
+import { minuteUsage } from "../core/minutes";
 import { diffOf } from "../core/diff";
 import { grepInWorker } from "../core/grep";
 import { searchSaid, searchSaidIn, startSearchIndex } from "../core/search";
@@ -1750,6 +1751,21 @@ const router = new Router(mapError)
         weeklyId: accountViews().find((a) => a.id === id)?.usage.windows.find((w) => w.kind === "weekly" && !w.scope)?.id ?? null,
         price: fleet.rates.price(id),
         outside: (from, to) => fleet.rates.split(id, from, to)?.outside ?? null,
+      }),
+    );
+  })
+  .add("GET", "/api/accounts/:id/minutes", ({ params, url }) => {
+    const homes = accounts.list();
+    const owner = owners(homes);
+    const home = homes.find((h) => h.id === params.id);
+    if (!home) throw new HttpError(404, "no such account");
+    const id = owner.get(home.id) ?? home.id;
+    return json(
+      minuteUsage({
+        accountId: id,
+        accountIds: homes.filter((h) => (owner.get(h.id) ?? h.id) === id).map((h) => h.id),
+        span: url.searchParams.get("span") === "week" ? "week" : "hour",
+        perMinute: accountViews().find((a) => a.id === id)?.usage.perMinute ?? null,
       }),
     );
   })

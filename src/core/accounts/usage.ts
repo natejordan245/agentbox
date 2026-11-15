@@ -15,7 +15,8 @@
  * - devin: Connect-JSON `GetUserStatus`, every 10 min, best effort.
  * - omp on OpenCode Go: Go's usage report, `GET …/go/v1/usage`, every 3 min,
  *   through the bridge, which holds the credentials. On an api-key service
- *   (Morph), no windows: only whether the service still takes the key.
+ *   (Morph), no windows: whether the service still takes the key, and where
+ *   it caps tokens per minute, what is left of the caps (`meter`).
  *
  * agentbox never refreshes a token (docs/v2.md). An expired access token
  * means we do not call the endpoint at all — a request would 401 — and the
@@ -28,7 +29,7 @@ import { randomUUID } from "node:crypto";
 import { EventEmitter } from "node:events";
 import { statSync } from "node:fs";
 import { creditSamplesSince, getKv, insertCreditSample, insertUsageSample, lastUsageSample, setKv, usageSamplesSince, type CreditSample, type UsageSampleRow } from "../db";
-import type { Account, AccountProvider, AccountUsage, CreditBalance, CreditReading, ProviderId, ResetConsumeResult, ResetCredit, ResetCredits, ResetOutcome, UsageWindow, WindowKind } from "../types";
+import type { Account, AccountProvider, AccountUsage, CreditBalance, CreditReading, MinuteLimit, ProviderId, ResetConsumeResult, ResetCredit, ResetCredits, ResetOutcome, UsageWindow, WindowKind } from "../types";
 import { exec as defaultExec, type ExecFn } from "./exec";
 import { AccountError, claudeJsonPath, credentialsPath, detectCli } from "./homes";
 import { bridgeUrl } from "../../bridge/models";
@@ -68,7 +69,7 @@ const CODEX_RESET_CONSUME_URL = "https://chatgpt.com/backend-api/wham/rate-limit
 const DEVIN_STATUS_PATH = "/exa.seat_management_pb.SeatManagementService/GetUserStatus";
 
 export type Reading =
-  | { kind: "ok"; at: number; windows: UsageWindow[]; notes: string[]; source: AccountUsage["source"]; resets?: ResetCredits | null; credits?: CreditReading | null }
+  | { kind: "ok"; at: number; windows: UsageWindow[]; notes: string[]; source: AccountUsage["source"]; resets?: ResetCredits | null; credits?: CreditReading | null; perMinute?: AccountUsage["perMinute"] }
   /** We chose not to ask (token expired, scope missing, not logged in). */
   | { kind: "skip"; stale: string }
   | { kind: "error"; stale: string; rateLimited?: boolean; retryAfterMs?: number | null; unauthorized?: boolean; sessionsRefused?: boolean };
@@ -783,16 +784,64 @@ async function fetchGoUsage(account: Account, deps: UsageDeps): Promise<Reading>
 
 // --------------------------------------------------------- api-key services
 
-/** A service sold on a key reports no usage (Morph: per-minute caps it does
- *  not say the state of), so a reading is whether it still takes the key:
- *  no windows, or the key refused. */
+/** A service sold on a key reports no windows, so a reading is whether it
+ *  still takes the key, and for one that caps tokens per minute, what its
+ *  reply headers say is left of the caps (`ModelService.meter`). */
 async function fetchKeyUsage(account: Account, svc: ModelService, deps: UsageDeps): Promise<Reading> {
   const held = readApiKey(account.home);
   if (!held) return { kind: "skip", stale: "no API key" };
+  const refused: Reading = { kind: "error", stale: `${svc.label} refused the key — add the account again with a new one`, unauthorized: true, sessionsRefused: true };
+  if (svc.meter) {
+    const m = svc.meter;
+    let res: Response;
+    try {
+      res = await deps.fetch(m.url, {
+        method: "POST",
+        headers: { authorization: `Bearer ${held.key}`, "content-type": "application/json" },
+        body: JSON.stringify({ model: m.model, messages: [{ role: "user", content: "." }], max_tokens: 1 }),
+        signal: AbortSignal.timeout(FETCH_TIMEOUT_MS),
+      });
+    } catch (err) {
+      return networkError(err, svc.label);
+    }
+    if (res.status === 401 || res.status === 403) {
+      await res.arrayBuffer().catch(() => undefined);
+      return refused;
+    }
+    const now = deps.now();
+    const limits = minuteLimits(res.headers, m.prefix, now);
+    // A 429 at the service's capacity carries the headers too.
+    if (!limits.length) return httpError(res, svc.label, now);
+    await res.arrayBuffer().catch(() => undefined);
+    return { kind: "ok", at: now, windows: [], notes: [], source: "endpoint", perMinute: { model: m.model, limits } };
+  }
   const verdict = await checkApiKey(svc, held.key, deps.fetch);
-  if (verdict === "refused") return { kind: "error", stale: `${svc.label} refused the key — add the account again with a new one`, unauthorized: true, sessionsRefused: true };
+  if (verdict === "refused") return refused;
   if (verdict !== "ok") return { kind: "error", stale: verdict };
   return { kind: "ok", at: deps.now(), windows: [], notes: [], source: "endpoint" };
+}
+
+/** The per-minute caps a reply's headers state: `<prefix><part>-limit`,
+ *  `-remaining`, and its burst reserve's `-burst` (state), `-burst-remaining`
+ *  and `-burst-reset` (seconds until it is full). */
+function minuteLimits(headers: Headers, prefix: string, now: number): MinuteLimit[] {
+  const out: MinuteLimit[] = [];
+  for (const [part, name] of [["input", "uncached-input"], ["output", "output"]] as const) {
+    const h = (k: string) => headers.get(`${prefix}${name}-${k}`);
+    const limit = toNum(h("limit"));
+    const remaining = toNum(h("remaining"));
+    if (limit === null || remaining === null) continue;
+    const state = h("burst");
+    const left = toNum(h("burst-remaining"));
+    const reset = toNum(h("burst-reset"));
+    out.push({
+      part,
+      limit,
+      remaining,
+      burst: state && left !== null ? { state, remaining: left, resetsAt: reset ? now + reset * 1000 : null } : null,
+    });
+  }
+  return out;
 }
 
 function fetchUsage(account: Account, deps: UsageDeps): Promise<Reading> {
@@ -1150,6 +1199,7 @@ export class UsageService extends EventEmitter {
       // last endpoint reading found rather than forgetting them.
       resets: r.resets === undefined ? (cur.resets ?? null) : r.resets,
       credits: r.credits == null ? null : creditBalance(this.chatgptAccountOf(accountId), r.at, r.credits),
+      perMinute: r.perMinute ?? null,
     };
     try {
       recordSamples(accountId, r.at, r.windows, r.source);

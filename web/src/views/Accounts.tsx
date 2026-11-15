@@ -9,6 +9,7 @@ import { noLimitOf, outstandingOf, paceText, paceWhy, planOf, providerPace, shor
 import { hrefOf, type Route } from "../route";
 import { Calibration } from "./Calibration";
 import { Insights } from "./Insights";
+import { MinuteHistory, MinuteMeter } from "./PerMinute";
 import { useAction } from "./session/useAction";
 import "./accounts.css";
 
@@ -386,7 +387,9 @@ function AccountCard({
       ) : null}
 
       <div className="ac-windows">
-        {windows.length === 0 ? (
+        {windows.length === 0 && a.usage.perMinute?.limits.length ? (
+          <MinuteMeter perMinute={a.usage.perMinute} />
+        ) : windows.length === 0 ? (
           <p className="hint">
             {a.auth.state === "missing"
               ? "No usage until it is logged in."
@@ -444,6 +447,8 @@ function AccountCard({
           ))}
         </ul>
       ) : null}
+
+      {service(a.service)?.meter ? <MinuteHistory accountId={a.id} /> : null}
 
       {claims.length > 0 ? (
         <div className="ac-claims">

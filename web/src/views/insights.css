@@ -5,12 +5,25 @@
  * under 3:1 on the panel, so every series is named in a legend with its
  * value beside it, never by color alone. */
 
-.ins {
+/* The Accounts card's per-minute chart (PerMinute.tsx, `pm-`) draws input
+ * and output in the same colors. */
+.ins,
+.pm {
   --ins-read: #2a78d6;
   --ins-w1h: #eb6834;
   --ins-w5m: #1baf7a;
   --ins-out: #eda100;
   --ins-in: #e87ba4;
+}
+[data-theme="dark"] :is(.ins, .pm) {
+  --ins-read: #3987e5;
+  --ins-w1h: #d95926;
+  --ins-w5m: #199e70;
+  --ins-out: #c98500;
+  --ins-in: #d55181;
+}
+
+.ins {
   --ins-full: color-mix(in srgb, var(--warning) 12%, transparent);
   display: flex;
   flex-direction: column;
@@ -19,11 +32,6 @@
   min-width: 0;
 }
 [data-theme="dark"] .ins {
-  --ins-read: #3987e5;
-  --ins-w1h: #d95926;
-  --ins-w5m: #199e70;
-  --ins-out: #c98500;
-  --ins-in: #d55181;
   --ins-full: color-mix(in srgb, var(--warning) 14%, transparent);
 }
 
