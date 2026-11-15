@@ -36,7 +36,7 @@ export function MinuteMeter({ perMinute }: { perMinute: NonNullable<AccountUsage
             <div className="ubar-head">
               <span className="ubar-label">{label}</span>
               <span className="ubar-pct">
-                {fmtTokens(used)} <span className="ubar-claim">of {fmtTokens(l.limit)}</span>
+                {fmtTokens(used)} <span className="ubar-claim">of {fmtTokens(l.limit).replace(/\.0(?=[kM]$)/, "")}</span>
               </span>
               <span className="ubar-reset">{burstText(l.burst)}</span>
             </div>
@@ -117,7 +117,7 @@ export function MinuteHistory({ accountId }: { accountId: string }) {
               const x = shown.series[p];
               if (x.cap === null) return null;
               const peak = fmtTokens(Math.max(...x.peak));
-              const cap = fmtTokens(x.cap);
+              const cap = fmtTokens(x.cap).replace(/\.0(?=[kM]$)/, "");
               const of = `${x.over.toLocaleString()} of ${shown.minutes.toLocaleString()} minutes (${Math.round((x.over / shown.minutes) * 100)}%)`;
               return (
                 <li key={p} title={p === "all" ? ALL_WHY : undefined}>
