@@ -282,8 +282,12 @@ const STARVED_WAIT_MS = 60_000;
 const ENTER_WAIT_MS = 3_000;
 const ENTER_TRIES = 3;
 
-/** The message is in the pane's input box, or nowhere, and was not submitted. */
-export class Unsubmitted extends Error {}
+/** The message was not submitted. `typed`: it may be a draft in the input box; false, nothing went in. */
+export class Unsubmitted extends Error {
+  constructor(message: string, readonly typed = true) {
+    super(message);
+  }
+}
 
 /**
  * Type `text` into the session as one prompt: a bracketed paste (so a
@@ -311,7 +315,7 @@ export class Unsubmitted extends Error {}
  */
 export async function sendText(name: string, text: string, opts: { pieces?: number } = {}): Promise<void> {
   if (!(await bracketedPasteOn(name))) {
-    throw new Unsubmitted(`its TUI did not turn bracketed paste on in ${STARVED_WAIT_MS / 1000}s, so it is not reading its terminal and nothing was typed`);
+    throw new Unsubmitted(`its TUI did not turn bracketed paste on in ${STARVED_WAIT_MS / 1000}s, so it is not reading its terminal and nothing was typed`, false);
   }
   const before = screenRows(name);
   if (opts.pieces) pasteInPieces(name, text, opts.pieces);

@@ -3813,6 +3813,7 @@ export class Fleet extends EventEmitter {
       this.typed.set(id, body);
     } catch (e) {
       if (!(e instanceof Unsubmitted)) throw e;
+      if (!e.typed) throw new FleetError(409, `not sent: ${e.message}`);
       // The text is a draft in the input box: it goes out with the next
       // message submitted, so it was said after all.
       told();
