@@ -169,6 +169,10 @@ export interface MinuteLimit {
   burst: { state: string; remaining: number; resetsAt: number | null } | null;
 }
 
+/** What a per-minute cap counts: uncached input, output, or every token,
+ *  cached input too. */
+export type MinutePart = "input" | "output" | "all";
+
 /** An account's tokens a minute against its per-minute caps, over the last
  *  hour or week (`GET /api/accounts/:id/minutes`), from the token totals
  *  Fleet samples per session. */
@@ -178,14 +182,13 @@ export interface MinuteUsage {
   to: number;
   /** A bucket's length: a minute over an hour, an hour over a week. */
   step: number;
-  /** Per bucket, in tokens a minute: the average over it and its busiest
-   *  minute (the same, for a bucket of one minute). */
-  buckets: { input: number; output: number; inputPeak: number; outputPeak: number }[];
-  /** The caps as last read; null before a reading named them. */
-  limits: { model: string; input: number; output: number } | null;
-  /** Minutes over each cap, of `minutes`. */
-  over: { input: number; output: number };
   minutes: number;
+  /** The model whose input and output caps these are, as last read. */
+  model: string | null;
+  /** Per bucket, in tokens a minute: the average over it and its busiest
+   *  minute (the same, for a bucket of one minute); the cap, null before a
+   *  reading named it; and how many of `minutes` went over it. */
+  series: Record<MinutePart, { avg: number[]; peak: number[]; cap: number | null; over: number }>;
   /** When a turn stopped on a rate limit (a 429 its CLI gave up retrying). */
   hits: number[];
 }

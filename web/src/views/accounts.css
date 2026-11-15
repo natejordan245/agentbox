@@ -336,6 +336,9 @@
 .pm-lines .ins-key {
   flex: none;
 }
+.pm [data-part="all"] {
+  --c: var(--ins-read);
+}
 .pm-key-hit {
   background: var(--danger);
   border-radius: 50%;

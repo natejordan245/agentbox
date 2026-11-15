@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import type { AccountUsage, MinuteLimit, MinuteUsage } from "../../../src/core/types";
+import type { AccountUsage, MinuteLimit, MinutePart, MinuteUsage } from "../../../src/core/types";
 import { api } from "../api";
 import { fmtTokens } from "../lib/format";
 import { usageTone } from "../lib/usage";
@@ -12,8 +12,8 @@ import "./insights.css";
  * hour or week of tokens a minute set against them (`src/core/minutes.ts`).
  */
 
-const PART = { input: "Uncached input", output: "Output" } as const;
-const PARTS = ["input", "output"] as const;
+const PART: Record<MinutePart, string> = { all: "All tokens", input: "Uncached input", output: "Output" };
+const PARTS: MinutePart[] = ["all", "input", "output"];
 
 function burstText(b: MinuteLimit["burst"]): string {
   if (!b) return "";
@@ -58,6 +58,9 @@ export function MinuteMeter({ perMinute }: { perMinute: NonNullable<AccountUsage
     </>
   );
 }
+
+const ALL_WHY =
+  "Morph also caps the tokens a key sends a minute, cached input included, beside the plan's caps. Over it, it answers 429, and omp waits and retries without recording it. Sessions on other accounts that call Morph with the same key are not counted here.";
 
 const TIME_FMT = new Intl.DateTimeFormat([], { hour: "numeric", minute: "2-digit" });
 const DAY_FMT = new Intl.DateTimeFormat([], { weekday: "short" });
@@ -107,32 +110,40 @@ export function MinuteHistory({ accountId }: { accountId: string }) {
         <p className="error-line">{error}</p>
       ) : !shown ? (
         <p className="hint">Reading…</p>
-      ) : !shown.limits ? (
-        <p className="hint">No per-minute caps read yet: refresh the account's usage.</p>
       ) : (
         <>
           <ul className="pm-lines">
             {PARTS.map((p) => {
-              const over = shown.over[p];
-              const peak = Math.max(...shown.buckets.map((b) => (p === "input" ? b.inputPeak : b.outputPeak)));
-              const cap = fmtTokens(shown.limits![p]);
+              const x = shown.series[p];
+              if (x.cap === null) return null;
+              const peak = fmtTokens(Math.max(...x.peak));
+              const cap = fmtTokens(x.cap);
+              const of = `${x.over.toLocaleString()} of ${shown.minutes.toLocaleString()} minutes (${Math.round((x.over / shown.minutes) * 100)}%)`;
               return (
-                <li key={p}>
+                <li key={p} title={p === "all" ? ALL_WHY : undefined}>
                   <span className="ins-key" data-part={p} />
-                  {over
-                    ? `${PART[p]} went over its ${cap} cap in ${over.toLocaleString()} of ${shown.minutes.toLocaleString()} minutes (${Math.round((over / shown.minutes) * 100)}%); busiest ${fmtTokens(peak)}.`
-                    : `${PART[p]} stayed under its ${cap} cap; busiest ${fmtTokens(peak)}.`}
+                  <span>
+                    {p === "all"
+                      ? x.over
+                        ? `All tokens, cached too, went over the key's ${cap} in ${of}, where Morph answers 429; busiest ${peak}.`
+                        : `All tokens, cached too, stayed under the key's ${cap}; busiest ${peak}.`
+                      : x.over
+                        ? `${PART[p]} went over its ${cap} cap in ${of}; busiest ${peak}.`
+                        : `${PART[p]} stayed under its ${cap} cap; busiest ${peak}.`}
+                  </span>
                 </li>
               );
             })}
-            <li title="omp retries a 429 by itself; only one it gave up on stops the turn and is counted here.">
+            <li title={ALL_WHY}>
               <span className="ins-key pm-key-hit" />
-              {shown.hits.length
-                ? `${shown.hits.length.toLocaleString()} turn${shown.hits.length === 1 ? "" : "s"} stopped on a 429 ${what}.`
-                : `No turn stopped on a 429 ${what}.`}
+              <span>
+                {shown.hits.length
+                  ? `${shown.hits.length.toLocaleString()} turn${shown.hits.length === 1 ? "" : "s"} stopped on a 429 ${what}; omp retried the rest without a record.`
+                  : `No turn stopped on a 429 ${what}; omp retries them without a record.`}
+              </span>
             </li>
           </ul>
-          <Chart data={shown} limits={shown.limits} />
+          <Chart data={shown} />
         </>
       )}
     </section>
@@ -141,38 +152,39 @@ export function MinuteHistory({ accountId }: { accountId: string }) {
 
 const PAD = { left: 38, right: 6, top: 8, bottom: 20 };
 
-function Chart({ data, limits }: { data: MinuteUsage; limits: NonNullable<MinuteUsage["limits"]> }) {
+function Chart({ data }: { data: MinuteUsage }) {
   const [ref, width] = useWidth<HTMLDivElement>();
   const [hover, setHover] = useState<number | null>(null);
-  const n = data.buckets.length;
+  const parts = PARTS.filter((p) => data.series[p].cap !== null);
+  const n = data.series.all.avg.length;
   const H = 130;
   const plotW = Math.max(0, width - PAD.left - PAD.right);
   const band = n ? plotW / n : 0;
-  const pctOf = (p: "input" | "output", b: MinuteUsage["buckets"][number]) => (b[p] / limits[p]) * 100;
-  const top = Math.max(100, ...data.buckets.flatMap((b) => PARTS.map((p) => pctOf(p, b))));
+  const pctOf = (p: MinutePart, i: number) => (data.series[p].avg[i]! / data.series[p].cap!) * 100;
+  const top = Math.max(100, ...parts.flatMap((p) => data.series[p].avg.map((_, i) => pctOf(p, i))));
   const ticks = niceTicks(top, 3);
   const yMax = ticks[ticks.length - 1]!;
   const yOf = (v: number) => PAD.top + (H - PAD.top - PAD.bottom) * (1 - v / yMax);
   const xOf = (i: number) => PAD.left + (i + 0.5) * band;
   const xAt = (t: number) => PAD.left + ((t - data.from) / data.step) * band;
-  const path = (p: "input" | "output") => data.buckets.map((b, i) => `${i ? "L" : "M"}${xOf(i).toFixed(1)},${yOf(pctOf(p, b)).toFixed(1)}`).join("");
+  const path = (p: MinutePart) => data.series[p].avg.map((_, i) => `${i ? "L" : "M"}${xOf(i).toFixed(1)},${yOf(pctOf(p, i)).toFixed(1)}`).join("");
 
   // Every quarter hour over an hour; local midnight over a week.
   const marks: { i: number; label: string }[] = [];
-  data.buckets.forEach((_, i) => {
+  for (let i = 0; i < n; i++) {
     const t = data.from + i * data.step;
     const d = new Date(t);
     if (data.step < 3_600_000 ? d.getMinutes() % 15 === 0 : d.getHours() === 0) {
       marks.push({ i, label: data.step < 3_600_000 ? TIME_FMT.format(t) : DAY_FMT.format(t) });
     }
-  });
+  }
 
   const pick = (e: React.PointerEvent) => {
     const r = (e.currentTarget as SVGElement).getBoundingClientRect();
     const i = Math.floor((e.clientX - r.left - PAD.left) / band);
     setHover(i >= 0 && i < n ? i : null);
   };
-  const b = hover !== null ? data.buckets[hover]! : null;
+  const b = hover;
   const at = hover !== null ? data.from + hover * data.step : 0;
   const hitsIn = hover !== null ? data.hits.filter((t) => t >= at && t < at + data.step).length : 0;
   const minute = data.step === 60_000;
@@ -186,7 +198,7 @@ function Chart({ data, limits }: { data: MinuteUsage; limits: NonNullable<Minute
             height={H}
             className="ins-svg"
             role="img"
-            aria-label={`Uncached input and output tokens a minute, as a share of each cap, ${minute ? "by minute" : "by hour"}`}
+            aria-label={`Tokens a minute as a share of each cap, ${minute ? "by minute" : "by hour"}`}
             onPointerMove={pick}
             onPointerDown={pick}
             onPointerLeave={(e) => e.pointerType === "mouse" && setHover(null)}
@@ -209,7 +221,7 @@ function Chart({ data, limits }: { data: MinuteUsage; limits: NonNullable<Minute
             ))}
             <line className="pm-cap" x1={PAD.left} x2={width - PAD.right} y1={yOf(100)} y2={yOf(100)} />
             {hover !== null ? <rect className="ins-hover" x={PAD.left + hover * band} y={PAD.top} width={Math.max(1, band)} height={H - PAD.top - PAD.bottom} /> : null}
-            {PARTS.map((p) => (
+            {parts.map((p) => (
               <path key={p} className="pm-line" data-part={p} d={path(p)} />
             ))}
             {data.hits.map((t) => (
@@ -218,19 +230,19 @@ function Chart({ data, limits }: { data: MinuteUsage; limits: NonNullable<Minute
               </circle>
             ))}
           </svg>
-          {b ? (
+          {b !== null ? (
             <div className="ins-tip" data-docked="">
               <div className="ins-tip-head">
                 {minute ? TIME_FMT.format(at) : `${WHEN_FMT.format(at)}, an hour`}
                 {hitsIn ? <b>{hitsIn} stopped on a 429</b> : null}
               </div>
-              {PARTS.map((p) => (
+              {parts.map((p) => (
                 <div key={p} className="ins-tip-row">
                   <span className="ins-key" data-part={p} />
                   <span>{PART[p]}</span>
                   <span className="num">
-                    {fmtTokens(b[p])} · {Math.round(pctOf(p, b))}%
-                    {minute ? "" : ` · busiest ${fmtTokens(p === "input" ? b.inputPeak : b.outputPeak)}`}
+                    {fmtTokens(data.series[p].avg[b])} · {Math.round(pctOf(p, b))}%
+                    {minute ? "" : ` · busiest ${fmtTokens(data.series[p].peak[b])}`}
                   </span>
                 </div>
               ))}

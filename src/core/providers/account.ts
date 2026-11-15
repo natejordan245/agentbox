@@ -53,7 +53,14 @@ export interface ModelService {
    *  every reply. A usage reading is a one-token chat completion of `model`
    *  at `url`, whose `<prefix>{uncached-input,output}-{limit,remaining}` and
    *  `-burst{,-remaining,-reset}` headers are `AccountUsage.perMinute`. */
-  meter?: { url: string; model: string; prefix: string };
+  meter?: {
+    url: string;
+    model: string;
+    prefix: string;
+    /** Tokens a minute, cached input too, that the service takes on a key
+     *  beyond the plan's caps: over it a reply is a 429 without the headers. */
+    allTokens: number;
+  };
   /** Whether it meters a plan in windows the balancer weighs. Sessions on one
    *  that does not claim nothing. */
   metered: boolean;
@@ -81,8 +88,11 @@ export const SERVICES: readonly ModelService[] = [
     metered: false,
     // Ultra caps uncached input and output tokens per minute per model, with
     // a burst reserve beyond that; every reply's x-morph-ultra-* headers say
-    // what is left. The default model's are the ones read.
-    meter: { url: "https://api.morphllm.com/v1/chat/completions", model: "morph-dsv41flash", prefix: "x-morph-ultra-" },
+    // what is left. The default model's are the ones read. Its gateway also
+    // caps every token a minute, cached input too, and answers over it with
+    // "429 Rate limit exceeded … Limit: 10000000 tokens/minute": with most of
+    // a session's tokens cache reads, that is the cap a busy fleet meets.
+    meter: { url: "https://api.morphllm.com/v1/chat/completions", model: "morph-dsv41flash", prefix: "x-morph-ultra-", allTokens: 10_000_000 },
     limits: "No daily or weekly limit. Tokens are capped per minute.",
     limitHoldMs: 60_000,
   },

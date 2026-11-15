@@ -34,6 +34,7 @@ import { attentionOf, byAttention, retrying } from "../core/attention";
 import { calibrate } from "../core/calibration";
 import { usageInsights } from "../core/insights";
 import { minuteUsage } from "../core/minutes";
+import { service } from "../core/providers/account";
 import { diffOf } from "../core/diff";
 import { grepInWorker } from "../core/grep";
 import { searchSaid, searchSaidIn, startSearchIndex } from "../core/search";
@@ -1760,12 +1761,16 @@ const router = new Router(mapError)
     const home = homes.find((h) => h.id === params.id);
     if (!home) throw new HttpError(404, "no such account");
     const id = owner.get(home.id) ?? home.id;
+    const view = accountViews().find((a) => a.id === id);
+    const read = view?.usage.perMinute ?? null;
+    const cap = (part: "input" | "output") => read?.limits.find((l) => l.part === part)?.limit ?? null;
     return json(
       minuteUsage({
         accountId: id,
         accountIds: homes.filter((h) => (owner.get(h.id) ?? h.id) === id).map((h) => h.id),
         span: url.searchParams.get("span") === "week" ? "week" : "hour",
-        perMinute: accountViews().find((a) => a.id === id)?.usage.perMinute ?? null,
+        model: read?.model ?? null,
+        caps: { input: cap("input"), output: cap("output"), all: service(view?.service)?.meter?.allTokens ?? null },
       }),
     );
   })
