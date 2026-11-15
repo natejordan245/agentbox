@@ -26,7 +26,6 @@ import { cliVersion } from "./cli-version";
 import { mostNamed } from "../prrepo";
 import { carryFlags, promptFiles, setsFlag, type Arity, type PromptFlag } from "../launch";
 import { ompAskStep, readOmpAsk } from "./omp-ask";
-import { underInput } from "./tui-screen";
 import type { Account, TimelineEvent, TimelinePage } from "../types";
 import { JsonlTail, type JsonlTailState } from "./jsonl";
 import {
@@ -913,10 +912,6 @@ function defaultModelOn(id: string): string | null {
   return null;
 }
 
-/** The editor: the foot of its box holds what is typed, between the corners,
- *  where a dialog's box closes on an unbroken rule. */
-const editor = (lines: string[], i: number): boolean => /^╰─\s.*\s─╯\s*$/.test(lines[i]!);
-
 export const ompAdapter: ProviderAdapter = {
   id: "omp",
   label: "omp",
@@ -1041,13 +1036,18 @@ export const ompAdapter: ProviderAdapter = {
   blockedOn(screen) {
     // A message under the welcome box, with the editor there to type /login in.
     if (/No models available/.test(screen)) return "login";
-    // Every dialog below stands where the editor was.
-    const s = underInput(screen, editor);
-    const tool = /Allow tool: ([\w:.-]+)/.exec(s);
+    // Each prompt is known by what only it draws, never by its words alone:
+    // the conversation on screen can say them (a scout reasoning about
+    // "pre-move sessions" was pushed as blocked three times), and the editor
+    // stays on screen under a tool's approval, so "under the editor" is no cut.
+    // The approval is a panel titled with the question.
+    const tool = /^\s*╭─ Allow tool: ([\w:.-]+)/m.exec(screen);
     if (tool) return `permission: ${tool[1]}`;
-    if (readOmpAsk(s)) return "asking a question";
-    if (/Approve and execute/.test(s) && /Refine plan/.test(s)) return "plan approval";
-    if (/belongs to a directory that no longer exists|Move session/i.test(s)) return "move session";
+    if (readOmpAsk(screen)) return "asking a question";
+    // The plan review fills the screen.
+    if (/Approve and execute/.test(screen) && /Refine plan/.test(screen)) return "plan approval";
+    // Asked on the terminal before the TUI starts, of a session whose directory is gone.
+    if (/Move \(re-root\) it into the current directory\? \[Y\/n\]/.test(screen)) return "move session";
     return null;
   },
 
