@@ -196,9 +196,24 @@ export function isAutoLabel(a: Pick<Account, "label" | "provider">): boolean {
 export function orgOf(a: Pick<Account, "provider" | "home">): string | null {
   if (a.provider !== "claude") return null;
   const path = claudeJsonPath({ home: a.home, isDefault: samePath(a.home, defaultHome("claude")) });
-  const org = (readJsonObject(path)?.oauthAccount as Record<string, unknown> | undefined)?.organizationUuid;
-  return typeof org === "string" && org ? org : null;
+  let st: { mtimeMs: number; size: number };
+  try {
+    st = statSync(path);
+  } catch {
+    return null;
+  }
+  const read = orgsRead.get(path);
+  if (read && read.mtimeMs === st.mtimeMs && read.size === st.size) return read.org;
+  const named = (readJsonObject(path)?.oauthAccount as Record<string, unknown> | undefined)?.organizationUuid;
+  const org = typeof named === "string" && named ? named : null;
+  orgsRead.set(path, { mtimeMs: st.mtimeMs, size: st.size, org });
+  return org;
 }
+
+/** What each `.claude.json` named as its organization, as of the file read.
+ *  The CLI rewrites that file all day and it is hundreds of KB to parse, while
+ *  whose home is whose is asked several times a pass (`owners`). */
+const orgsRead = new Map<string, { mtimeMs: number; size: number; org: string | null }>();
 
 /**
  * Whether two homes hold the same login. For codex that is the email; for

@@ -60,7 +60,7 @@ import { CARD_KINDS, Cards, cardsOn, moveCards } from "../core/cards";
 import type { CardKind, CardState, McpServerInput, McpState, OrgReadEvent, Session } from "../core/types";
 import { environOf, startedAtOf } from "../core/providers/procs";
 import { branchHolders, openPrs, prHeadBranch, prWarnings, repoSlugOf, syncPrs } from "../core/prs";
-import { claimPr, helpPr, holderOf, movePrClaims, parsePrRef, prClaims, PrHeld, prHelpers, releasePr, transferPr } from "../core/prclaims";
+import { claimPr, helpPr, holderOf, holders, movePrClaims, parsePrRef, prClaims, PrHeld, prHelpers, releasePr, transferPr } from "../core/prclaims";
 import { removeDetachedWorktree, repoCheckoutPath, repoFullNameOf } from "../core/git";
 import { modelOptions } from "../core/models";
 import { MAX_UPLOAD_BYTES, saveUpload, uploadFile } from "../core/uploads";
@@ -211,7 +211,11 @@ function cardId(raw: string): number {
 /** This machine's part in its org (docs/org.md); idle outside one. */
 export const org = new Org({
   sessions: () => fleet.sessions(),
-  prsOf: (id) => prClaimsNow().filter((c) => c.sessionId === id).map((c) => `${c.repo}#${c.number}`),
+  prs: () => {
+    const by = new Map<string, string[]>();
+    for (const c of prClaimsNow()) by.set(c.sessionId, [...(by.get(c.sessionId) ?? []), `${c.repo}#${c.number}`]);
+    return by;
+  },
   claims: () => fleet.claims(),
   deliver: (to, from, text, wake) => sendAsAgent(fleet, to, text, { from: from || null, wake }, Date.now()),
   conversation: async (id, limit) =>
@@ -405,8 +409,8 @@ function buildAccountViews(): AccountView[] {
 
 /** Who has which pull request, now (src/core/prclaims.ts). */
 function prClaimsNow(): PrClaim[] {
-  const sessions = fleet.sessions();
-  return prClaims(sessions, branchHolders(sessions));
+  const live = holders(fleet.sessions());
+  return prClaims(live, branchHolders(live));
 }
 
 /** The PR a caller names, a bare number being one of the repo it called

@@ -28,8 +28,8 @@ const READ_TEXT_MAX = 8_000;
 export interface OrgDeps {
   /** This machine's sessions. */
   sessions: () => readonly Session[];
-  /** The PRs each of its sessions holds, `owner/repo#n`. */
-  prsOf: (sessionId: string) => string[];
+  /** The PRs each of its sessions holds, `owner/repo#n`, by session. */
+  prs: () => ReadonlyMap<string, string[]>;
   /** What each account's sessions here still claim (`Fleet.claims`). */
   claims: () => ReadonlyMap<string, ClaimView[]>;
   /** Deliver a message from another machine, as an agent's: what came of it. */
@@ -113,6 +113,7 @@ export class Org {
     const now = new Date();
     const mine = this.mine();
     const claims = this.deps.claims();
+    const prs = this.deps.prs();
     if (mine.length) {
       await col.bulkWrite(
         mine.map((s) => {
@@ -131,7 +132,7 @@ export class Org {
                   branch: open ? s.branch : null,
                   status: s.status,
                   accountId: s.accountId,
-                  prs: open ? this.deps.prsOf(s.id) : [],
+                  prs: open ? (prs.get(s.id) ?? []) : [],
                   claim: claim && !open ? { ...claim, title: "" } : claim,
                   private: !open,
                   seenAt: now,
@@ -147,7 +148,12 @@ export class Org {
     await col.deleteMany({ machine: me, _id: { $nin: mine.map((s) => s.id) } });
     const rows = await col.find({ machine: { $ne: me } }, { projection: { inbox: 0 } }).toArray();
     const labels = new Map(this.accounts.map((a) => [a._id, a.label]));
-    const next = rows.filter((r) => !r.private).map((r) => viewOf(r, labels, now.getTime())).sort((a, b) => b.seenAt - a.seenAt);
+    // In an order that holds from one read to the next: each machine's rows
+    // are seen anew every `ROWS_MS`, and the board lists people in this order.
+    const next = rows
+      .filter((r) => !r.private)
+      .map((r) => viewOf(r, labels, now.getTime()))
+      .sort((a, b) => +a.away - +b.away || a.person.localeCompare(b.person) || a.machine.localeCompare(b.machine) || a.id.localeCompare(b.id));
     // Claims move every pass, so they are read here rather than compared:
     // a row unseen past AWAY_MS is a machine that is off, and holds nothing.
     const remote = new Map<string, ClaimView[]>();
@@ -159,10 +165,11 @@ export class Org {
     }
     this.remote = remote;
     this.reached();
-    if (JSON.stringify(next) !== JSON.stringify(this.others)) {
-      this.others = next;
-      this.deps.changed();
-    }
+    // When a row was last seen is not a change the board shows, until it makes its session away.
+    const shown = (list: OrgSessionView[]) => JSON.stringify(list, (key, value: unknown) => (key === "seenAt" ? undefined : value));
+    const changed = shown(next) !== shown(this.others);
+    this.others = next;
+    if (changed) this.deps.changed();
   }
 
   /** What sessions on other machines still claim on pooled logins, by

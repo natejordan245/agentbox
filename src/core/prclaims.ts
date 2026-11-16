@@ -103,6 +103,10 @@ export function prReleaseTold(sessionId: string): void {
 const holds = (s: Session | undefined): s is Session =>
   !!s && s.host !== "subagent" && (s.status === "running" || s.status === "waiting" || s.status === "blocked");
 
+/** The sessions that can hold a PR: the live ones. Who holds what is asked
+ *  of these alone, so it costs what is running, not what ever ran. */
+export const holders = (sessions: readonly Session[]): Session[] => sessions.filter(holds);
+
 interface Row { repo: string; number: number; session_id: string; at: number }
 
 /** The live sessions helping a PR, oldest first. */
@@ -118,12 +122,14 @@ export function helpPr(pr: PrRef, sessionId: string, now: number): void {
 }
 
 /** Every PR a live session holds: those said, then those held by a branch
- *  that nobody said otherwise about. `byBranch` is `branchHolders` (prs.ts). */
-export function prClaims(sessions: readonly Session[], byBranch: readonly Omit<PrClaim, "how">[]): PrClaim[] {
-  const byId = new Map(sessions.map((s) => [s.id, s]));
+ *  that nobody said otherwise about. `live` is `holders` of the sessions, and
+ *  `byBranch` is `branchHolders` (prs.ts) of the same. */
+export function prClaims(live: readonly Session[], byBranch: readonly Omit<PrClaim, "how">[]): PrClaim[] {
+  const byId = new Map(live.map((s) => [s.id, s]));
   const helping = new Set((getDb().query("SELECT repo, number, session_id FROM pr_helpers").all() as { repo: string; number: number; session_id: string }[])
     .map((h) => `${h.repo.toLowerCase()}#${h.number}@${h.session_id}`));
-  const rows = getDb().query("SELECT * FROM pr_claims ORDER BY at").all() as Row[];
+  // The claims of the live sessions, not of every session there has been.
+  const rows = getDb().query("SELECT * FROM pr_claims WHERE session_id IN (SELECT value FROM json_each(?)) ORDER BY at").all(JSON.stringify([...byId.keys()])) as Row[];
   const out: PrClaim[] = rows
     .filter((r) => holds(byId.get(r.session_id)))
     .map((r) => ({ repo: r.repo, number: r.number, sessionId: r.session_id, how: "said" as const, at: r.at }));

@@ -39,6 +39,12 @@ export function getDb(): Database {
   db.exec("PRAGMA synchronous = NORMAL");
   db.exec("PRAGMA busy_timeout = 5000");
   db.exec("PRAGMA foreign_keys = ON");
+  // SQLite's own defaults keep 2 MB of pages and read the rest from the file
+  // one page a call: on the server's thread that was ten thousand reads a
+  // second. Mapped, a page already in the system's cache costs nothing.
+  db.exec("PRAGMA mmap_size = 1073741824");
+  db.exec("PRAGMA cache_size = -65536");
+  db.exec("PRAGMA temp_store = MEMORY");
   migrate(db);
   return db;
 }
@@ -1289,10 +1295,13 @@ export function rateLimitHitsSince(sinceMs: number): { sessionId: string; accoun
  *  on, and what that model last told it (`TranscriptFacts.modelOutcome`, as
  *  stored with its facts), null for one that has not heard yet. */
 export function modelOutcomesSince(provider: ProviderId, sinceMs: number): { accountId: string | null; model: string | null; startedAt: number; outcome: ModelOutcome | null }[] {
-  const rows = getDb()
-    .query("SELECT account_id, model, started_at, json_extract(facts, '$.modelOutcome') AS outcome FROM sessions WHERE provider = ? AND last_activity_at >= ?")
-    .all(provider, sinceMs) as { account_id: string | null; model: string | null; started_at: number; outcome: string | null }[];
-  return rows.map((r) => ({ accountId: r.account_id, model: r.model, startedAt: r.started_at, outcome: r.outcome ? (JSON.parse(r.outcome) as ModelOutcome) : null }));
+  const out: { accountId: string | null; model: string | null; startedAt: number; outcome: ModelOutcome | null }[] = [];
+  for (const r of cachedRecords().values()) {
+    if (r.provider !== provider || r.lastActivityAt < sinceMs) continue;
+    const outcome = (r.facts as { modelOutcome?: ModelOutcome | null } | null)?.modelOutcome ?? null;
+    out.push({ accountId: r.accountId, model: r.model ?? null, startedAt: r.startedAt, outcome });
+  }
+  return out;
 }
 
 // -------------------------------------------------------------------- btw
