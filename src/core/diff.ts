@@ -15,6 +15,8 @@ const MAX_TOTAL_PATCH_BYTES = 3 * 1024 * 1024;
 const MAX_PATCH_FILES = 400;
 /** Patches read at once: each is a process, and the agents need the cores. */
 const PATCHES_AT_ONCE = 6;
+/** A diff of more changed lines than this is not read in one piece. */
+const MAX_WHOLE_LINES = 200_000;
 
 /** Which branch a session's work is judged against: the default branch of the
  *  repository its directory belongs to. */
@@ -45,6 +47,7 @@ export async function diffOf(session: Session, base?: string): Promise<SessionDi
 
   const against = await mergeBase(wt, base);
   const [tracked, untracked] = await Promise.all([trackedFiles(wt, against), untrackedFiles(wt)]);
+  const patches = await trackedPatches(wt, against, tracked);
   // Spent as the patches come in, a few at a time: the cap is on what a
   // browser is sent, not a count to the byte.
   let budget = MAX_TOTAL_PATCH_BYTES;
@@ -55,7 +58,7 @@ export async function diffOf(session: Session, base?: string): Promise<SessionDi
     if (index >= MAX_PATCH_FILES || budget <= 0) {
       return { ...entry.file, patch: `… patch omitted: this diff exceeded ${MAX_PATCH_FILES} files or ${megabytes(MAX_TOTAL_PATCH_BYTES)} of patch text. The counts on this row are still exact.` };
     }
-    const patch = clamp(await (entry.untracked ? untrackedPatch(wt, entry.file.path) : trackedPatch(wt, against, entry.file.path)));
+    const patch = clamp(entry.untracked ? await untrackedPatch(wt, entry.file.path) : (patches.get(entry.file.path) ?? (await trackedPatch(wt, against, entry.file.path))));
     budget -= patch.length;
     return { ...entry.file, patch };
   });
@@ -214,6 +217,39 @@ function probeNew(abs: string): { binary: boolean; lines: number } {
   const newlines = text.split("\n").length - 1;
   // A file with no trailing newline still has that last line in the patch.
   return { binary: false, lines: text.endsWith("\n") ? newlines : newlines + 1 };
+}
+
+/**
+ * Every tracked file's patch from one `git diff`, by path: asked a file at a
+ * time, git reads the checkout's index again for each, half a second in a
+ * large repository. Empty for a diff too large to hold in one piece, and
+ * without the files whose names git quotes: those are read one at a time
+ * (`trackedPatch`).
+ */
+async function trackedPatches(wt: string, against: string, tracked: Entry[]): Promise<Map<string, string>> {
+  const out = new Map<string, string>();
+  const lines = tracked.reduce((n, e) => n + e.file.additions + e.file.deletions, 0);
+  if (tracked.length > MAX_PATCH_FILES || lines > MAX_WHOLE_LINES) return out;
+  const r = await run(["git", "-c", "core.quotePath=false", "diff", "-M", against], wt);
+  if (r.code !== 0) return out;
+  // No line of a patch's body starts a line with "diff --git": only a file's header does.
+  for (const chunk of r.stdout.split(/^(?=diff --git )/m)) {
+    const path = chunkPath(chunk);
+    if (path !== null) out.set(path, chunk);
+  }
+  return out;
+}
+
+/** The file one file's part of a `git diff` is about: its new name, or the
+ *  one it had when it was deleted. Null for a name git put in quotes. */
+function chunkPath(chunk: string): string | null {
+  // The header alone: an added line can read "++ b/…" and look like one of its lines.
+  const body = chunk.indexOf("\n@@");
+  const head = body < 0 ? chunk : chunk.slice(0, body);
+  const named = /^(?:rename|copy) to (.+)$/m.exec(head) ?? /^\+\+\+ b\/(.+?)\t?$/m.exec(head) ?? /^--- a\/(.+?)\t?$/m.exec(head);
+  if (named) return named[1]!;
+  // A change of mode, or a binary file: named only on the first line, twice.
+  return /^diff --git a\/(.+) b\/\1$/m.exec(head)?.[1] ?? null;
 }
 
 async function trackedPatch(wt: string, against: string, path: string): Promise<string> {
