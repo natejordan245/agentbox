@@ -95,9 +95,12 @@ own homes (the account and any copy logged in as the same login, the CLI's
 own home usually), and on each other member's machine, while it is shared,
 the pool's home of it under `org/accounts/<id>`. A machine that holds a
 login of its own of a shared one gets no mirror of it. A login's name across
-machines is its email for claude, codex, devin and muse, and one OpenCode
-account in one workspace for an omp sign-in (or the key itself, by digest) — an email can hold several workspaces,
-each its own sign-in.
+machines is its email for codex, devin and muse, its email in one
+organization for claude, and one OpenCode account in one workspace for an omp
+sign-in (or the key itself, by digest): an email can hold several
+organizations or workspaces, each its own sign-in. A home of yours logged in
+as another login of the same email is not a home of the shared one, and keeps
+its own.
 
 - **Sharing** seals the login into `accounts` with `shared: true`, or sets
   `shared` again on one the store already keeps. At the next sync (at once,

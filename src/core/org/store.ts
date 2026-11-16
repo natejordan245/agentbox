@@ -15,7 +15,8 @@ export interface StoreAccount {
   email: string | null;
   plan: string | null;
   /** The provider's own name for the login where an email holds several
-   *  (omp: one OpenCode account in one workspace); null otherwise. */
+   *  (claude: the email in one organization; omp: one OpenCode account in one
+   *  workspace); null otherwise. */
   externalId?: string | null;
   /** The login, sealed with the org key (seal.ts); null while it needs logging in again. */
   login: string | null;

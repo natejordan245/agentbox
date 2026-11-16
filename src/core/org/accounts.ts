@@ -20,7 +20,7 @@ import { createHash } from "node:crypto";
 import { chmodSync, existsSync, mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
 import { join, dirname } from "node:path";
 import { deleteAccount, getAccount, insertAccount, listAccounts } from "../db";
-import { claudeJsonPath, credentialsPath, resyncShared } from "../accounts/homes";
+import { claudeJsonPath, credentialsPath, orgOf, resyncShared } from "../accounts/homes";
 import { POOLED, readGoLogin, writeGoLogin, type GoLogin } from "../accounts/gocred";
 import { decodeJwtPayload } from "../accounts/identity";
 import { exchangeGoRefresh, REFRESH_AHEAD_MS } from "../accounts/godevice";
@@ -117,8 +117,9 @@ interface Kind<L extends Login = Login> {
   /** Refreshed `ahead` ms before it runs out, and at least `every` ms; a
    *  login without it does not rotate and is never refreshed. */
   refresh?: { ahead: number; every?: number; rotates?(l: L): boolean; run(l: L, now: number): Promise<{ login: L } | { refused: string } | { retry: string }> };
-  /** The login's own id, where the email does not name it. */
-  id?(home: string): string | null;
+  /** The login's own id, where the email does not name it; null for a home
+   *  that cannot say which login it holds. */
+  id?(a: Pick<Account, "home" | "email">): string | null;
   /** Why a home whose login `read` does not take cannot be shared. */
   unshareable?: string;
   /** On macOS the login is in the Keychain, which agentbox cannot share yet. */
@@ -187,6 +188,13 @@ const KINDS: Record<AccountProvider, Kind> = {
         return { login: { ...l, claudeAiOauth: o } };
       },
     },
+    // An email can hold a login in each of several organizations (a personal
+    // plan and a team seat), each its own refresh token; one written over the
+    // other takes that login from the machine, and its sessions' thinking.
+    id(a) {
+      const org = orgOf({ provider: "claude", home: a.home });
+      return a.email && org ? `${a.email.toLowerCase()}:${org}` : null;
+    },
     keychain: true,
   },
   codex: {
@@ -237,7 +245,7 @@ const KINDS: Record<AccountProvider, Kind> = {
     refresh: { ahead: REFRESH_AHEAD_MS, rotates: (l) => !isKey(l), run: (l: GoLogin, now) => exchangeGoRefresh(l, fetch, now) },
     // An email can hold several OpenCode accounts, each its own sign-in; a
     // key is named by its service and a digest of it.
-    id(home) {
+    id({ home }) {
       const key = readApiKey(home);
       if (key) return `${key.service}:${createHash("sha256").update(key.key).digest("hex").slice(0, 16)}`;
       const l = readGoLogin(home);
@@ -280,11 +288,11 @@ const pendingPath = (id: string): string => join(orgAccountsRoot(), `${id}.pendi
 
 // ------------------------------------------------------------------- syncing
 
-/** A login's name on every machine: one email for claude and codex, its own
- *  id for a provider whose email does not name it (omp). */
+/** A login's name on every machine: its email for codex, its own id for a
+ *  provider whose email does not name it (claude, omp). */
 function loginKey(a: Pick<Account, "provider" | "email" | "home">): string | null {
   const id = KINDS[a.provider].id;
-  const name = id ? id(a.home) : a.email?.toLowerCase();
+  const name = id ? id(a) : a.email?.toLowerCase();
   return name ? `${a.provider}:${name}` : null;
 }
 
@@ -294,10 +302,16 @@ function storeKey(d: Pick<StoreAccount, "provider" | "email" | "externalId">): s
 }
 
 /** Every home here of a login the store keeps: each of yours logged in as
- *  it (the sharer's own account has its id), or the pool's mirror of it. */
+ *  it, and the account with its id where the name cannot say (the pool's
+ *  mirror, or a login without one). A home of yours logged in as another
+ *  login is never one of them, whatever its id: the store's login written
+ *  there would replace the one it holds. */
 function homesOf(doc: StoreAccount): Account[] {
   const key = storeKey(doc);
-  return listAccounts(doc.provider).filter((a) => a.id === doc._id || (!isOrgAccount(a) && key !== null && loginKey(a) === key));
+  return listAccounts(doc.provider).filter((a) => {
+    const mine = isOrgAccount(a) ? null : loginKey(a);
+    return mine !== null && key !== null ? mine === key : a.id === doc._id;
+  });
 }
 
 /** One pass over the store's logins: this machine's homes of each made to
@@ -447,7 +461,7 @@ export async function shareWithOrg(accountId: string): Promise<void> {
     label: a.label,
     email: a.email?.toLowerCase() ?? null,
     plan: a.plan,
-    externalId: kind.id?.(a.home) ?? null,
+    externalId: kind.id?.(a) ?? null,
     login: seal(org.key, login),
     version: 1,
     refreshedAt: null,
