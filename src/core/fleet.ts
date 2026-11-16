@@ -197,6 +197,8 @@ const BREATHE_MS = 25;
 /** Dialogs are only auto-answered this soon after we start a process: a key
  *  pressed into a session you are using is worse than a dialog left open. */
 const AUTO_ANSWER_MS = 120_000;
+/** How long a start-up dialog has asked for the same keys before they go in. */
+const DIALOG_SETTLE_MS = 1_500;
 /** A dead pane is kept this long so its last screen can be read, then killed. */
 const DEAD_PANE_MS = 10 * 60_000;
 /** A new token sample at most this often per session (plus at turn end). */
@@ -395,7 +397,9 @@ export class Fleet extends EventEmitter {
    *  claim is new there from then, however long ago it started. Lost on a
    *  restart, which counts a claim made just before it as already measured. */
   private wokeAt = new Map<string, number>();
-  private answered = new Map<string, { sig: string; at: number; tries: number }>();
+  /** A session's start-up dialog: the screen keys last went into and how often,
+   *  and the keys it has asked for since (`since`) without their being pressed. */
+  private answered = new Map<string, { sig: string; tries: number; keys: string; since: number }>();
   /** Sessions whose start-up dialog the last pass was answering (`answerStartUps`). */
   private answering = new Set<string>();
   /** Permission prompts `approvePrompt` has pressed Yes on, by session. */
@@ -2641,22 +2645,30 @@ export class Fleet extends EventEmitter {
     if (!screen) return false;
     const keys = adapter.autoAnswer(screen, { bypassPermissions: getSettings().autoApprove });
     if (!keys) return false;
-    // Claude's trust dialog ignores keys for a moment after it opens, so the
-    // same screen again is worth another try — a few, spaced out, then stop:
-    // pressing keys forever into a dialog we misread is worse than leaving
-    // it, and from then it is yours.
+    // The same screen again after a press is worth another try (Claude's
+    // trust dialog can ignore keys) — a few, then stop: pressing keys forever
+    // into a dialog we misread is worse than leaving it, and from then it is
+    // yours.
     const sig = screen.trim().slice(-400);
     const prev = this.answered.get(rec.id);
-    if (prev && prev.sig === sig) {
-      if (prev.tries >= 4) return false;
-      if (now - prev.at < 1_500) return true;
+    const tries = prev?.sig === sig ? prev.tries : 0;
+    if (tries >= 4) return false;
+    // Keys go in once the dialog has asked for them for a moment, never as
+    // it opens: one still coming up can take the Enter and lose the move
+    // before it, and Claude's focuses "No, exit".
+    const want = keys.join(" ");
+    if (prev?.keys !== want) {
+      this.answered.set(rec.id, { sig, tries, keys: want, since: now });
+      return true;
     }
-    this.answered.set(rec.id, { sig, at: now, tries: prev && prev.sig === sig ? prev.tries + 1 : 1 });
+    if (now - prev.since < DIALOG_SETTLE_MS) return true;
+    this.answered.set(rec.id, { sig, tries: tries + 1, keys: "", since: now });
     try {
       await this.deps.runtime.sendKeys(pane.name, keys);
     } catch {
       return false; // the pane went away between capture and keys
     }
+    console.log(`agentbox: ${rec.id}: answered its start-up dialog (${want})`);
     return true;
   }
 
