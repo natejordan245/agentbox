@@ -26,6 +26,7 @@ import type {
   ColdState,
   DepState,
   DepStatus,
+  Draft,
   Health,
   HotState,
   Card,
@@ -523,6 +524,13 @@ class Wire {
     return this.watching;
   }
 
+  /** This page's copy of a draft, or that it is gone as of `at`. Dropped
+   *  while the socket is down: the sender sends again once it is told what
+   *  the server holds. */
+  draft(key: string, draft: Draft | null, at: number): void {
+    this.send({ type: "draft", key, draft, at });
+  }
+
   /**
    * Back in the foreground, or back online: skip whatever backoff is left.
    * Only while waiting on the timer; a socket already connecting is left be.
@@ -648,6 +656,15 @@ if (typeof document !== "undefined") {
   document.addEventListener("visibilitychange", () => document.visibilityState === "visible" && wire.wake());
   window.addEventListener("online", wire.wake);
 }
+
+/** Drafts on the page's socket, both ways (views/session/drafts.ts). */
+export const draftWire = {
+  listen: (fn: (m: Extract<ServerMessage, { type: "drafts" | "draft" }>) => void): (() => void) =>
+    wire.onMessage((m) => {
+      if (m.type === "drafts" || m.type === "draft") fn(m);
+    }),
+  send: (key: string, draft: Draft | null, at: number): void => wire.draft(key, draft, at),
+};
 
 export function useConnection(): Connection & { retryNow: () => void } {
   const status = useSyncExternalStore(wire.onStatus, wire.getStatus, wire.getStatus);

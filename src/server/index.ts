@@ -51,6 +51,7 @@ import { contextDocs, readContextDoc, writeContextDoc } from "./context";
 import { briefingText } from "../core/providers/briefing";
 import { addRepo, deleteRepo, getDb, getKv, listSessionRecords, resolveSessionRefs, sessionIdsFor, getRepoById, getSettings, setKv, listBtw, listRepos, listSchedules, mergeSettings, saveSettings, setRepoSetup, setRepoWorktreeDefault } from "../core/db";
 import { parseSetup } from "../core/setup";
+import { listDrafts, takeDraft } from "../core/drafts";
 import { devServerPage, devServerStatus } from "../core/devserver";
 import { serviceInstalled, installService, lingering } from "../core/service";
 import { readUserIdentity } from "../core/user";
@@ -722,6 +723,14 @@ function handleAppMessage(ws: Socket, raw: string | Buffer): void {
   }
   const msg = parsed.message;
   if (msg.type === "ping" || ws.data.kind !== "app") return;
+  if (msg.type === "draft") {
+    // The later copy is everyone's; a sender whose copy is not is told what is held instead.
+    const kept = takeDraft(msg.key, msg.draft, msg.at);
+    const frame: ServerMessage = { type: "draft", key: msg.key, draft: kept.draft, at: kept.at };
+    if (kept.took) broadcast(frame);
+    else send(ws, frame);
+    return;
+  }
   ws.data.watching = msg.sessionId;
   // A copy the page still holds goes on from where it ends: a session you go
   // back to costs what it said since, not its newest page again.
@@ -2074,6 +2083,7 @@ function welcome(ws: Socket): void {
   send(ws, { type: "metrics", state: metricsSnapshot() });
   send(ws, { type: "build", entry: uiBuild });
   send(ws, { type: "behind", behind: serverBehind });
+  send(ws, { type: "drafts", drafts: listDrafts() });
   setMetricsWatchers(clients.size);
   // A watch sent while it waited.
   if (ws.data.kind === "app" && ws.data.watching) {

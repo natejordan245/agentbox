@@ -2,7 +2,7 @@
  *  Pure, apart from the two localStorage calls. */
 
 import type { ModelOption, PrInfo, ProviderId, Repo, Scope, Session, SkillInfo, SkillSource } from "../../../src/core/types";
-import type { SavedAttachment } from "../attachments";
+import { loadDraft } from "../views/session/drafts";
 import { prRefs } from "./prlinks";
 
 // ------------------------------------------------------------------ prefs
@@ -23,11 +23,11 @@ export interface NewSessionPrefs {
   /** Personal or the org's, in an org. */
   scope?: Scope;
   perProvider?: Partial<Record<ProviderId, { accountId?: string; model?: string; effort?: string }>>;
-  /** The unsent prompt; cleared when a session starts. */
-  draft?: string;
-  /** Images already uploaded for the draft. */
-  draftImages?: SavedAttachment[];
 }
+
+/** The dialog's unsent prompt is a draft like a composer's (views/session/drafts.ts),
+ *  one per project, so it is on your other devices too. */
+export const promptDraftKey = (project: string | null): string => `new:${project ?? ""}`;
 
 const PREFS_KEY = "agentbox.newSession";
 /** Each project's dialog remembers on its own, under its own key, so a draft
@@ -46,7 +46,7 @@ export function loadPrefs(project: string | null = null): NewSessionPrefs {
     }
     const v = JSON.parse(raw ?? "{}") as unknown;
     const prefs = v && typeof v === "object" ? (v as NewSessionPrefs) : {};
-    if (project && !prefs.draft?.trim() && !prefs.draftImages?.length) {
+    if (project && !loadDraft(promptDraftKey(project))) {
       return { ...prefs, where: "repo", repoId: project };
     }
     return prefs;

@@ -13,7 +13,7 @@ import { createPortal } from "react-dom";
 import { api, screenshotUrl, uploadUrl, type RecentScreenshot } from "./api";
 import { Icon, Spinner } from "./components";
 import { stepOf, trailFrom } from "./lib/previews";
-import { loadDraft, newRevision, saveDraft } from "./views/session/drafts";
+import { draftTaken, loadDraft, newRevision, onDraftWork, saveDraft, type Draft } from "./views/session/drafts";
 import { useDismiss, useFloating } from "./views/newsession/popover";
 
 export interface Attachment {
@@ -60,6 +60,10 @@ export function expandImages(text: string, paths: ReadonlyMap<number, string>): 
   });
 }
 
+/** Uploaded images as a box shows them: the ones its text still names. */
+const shown = (text: string, uploaded: readonly SavedAttachment[]): Attachment[] =>
+  uploaded.filter((a) => tokensIn(text).has(a.n)).map((a) => ({ n: a.n, url: uploadUrl(a.name), state: "ready", error: null }));
+
 export function useAttachments({
   text,
   setText,
@@ -71,9 +75,7 @@ export function useAttachments({
   textareaRef: RefObject<HTMLTextAreaElement | null>;
   initial?: readonly SavedAttachment[];
 }) {
-  const [atts, setAtts] = useState<Attachment[]>(() =>
-    (initial ?? []).filter((a) => tokensIn(text).has(a.n)).map((a) => ({ n: a.n, url: uploadUrl(a.name), state: "ready", error: null })),
-  );
+  const [atts, setAtts] = useState<Attachment[]>(() => shown(text, initial ?? []));
   /** Uploads, by image number: read at send time without waiting on a render. */
   const saved = useRef(new Map<number, { name: string; path: string }>((initial ?? []).map((a) => [a.n, { name: a.name, path: a.path }])));
   const pending = useRef(new Map<number, Promise<void>>());
@@ -165,9 +167,14 @@ export function useAttachments({
     return expandImages(t, new Map([...saved.current].map(([n, u]) => [n, u.path])));
   }
 
-  function clear() {
-    atts.forEach(forget);
-    setAtts([]);
+  /** The images of another draft, in place of these: `text` is the one the box is given with them. */
+  function reset(text: string, uploaded: readonly SavedAttachment[]) {
+    pending.current.clear();
+    saved.current = new Map(uploaded.map((a) => [a.n, { name: a.name, path: a.path }]));
+    setAtts((xs) => {
+      for (const a of xs) if (a.url.startsWith("blob:")) URL.revokeObjectURL(a.url);
+      return shown(text, uploaded);
+    });
   }
 
   /** Reattach a failed submission's already uploaded images, with numbers
@@ -222,7 +229,7 @@ export function useAttachments({
     remove,
     retry,
     resolve,
-    clear,
+    reset,
     restore,
     onKeyDown,
     handlers,
@@ -249,19 +256,65 @@ export type Attachments = ReturnType<typeof useAttachments>;
 export function useDraft(key: string, textareaRef: RefObject<HTMLTextAreaElement | null>) {
   const draft = useMemo(() => loadDraft(key), [key]);
   const [text, setText] = useState(draft?.text ?? "");
-  const revision = useRef(draft?.revision ?? newRevision()).current;
+  const revision = useRef(draft?.revision ?? newRevision());
   const images = useAttachments({ text, setText, textareaRef, initial: draft?.images });
   const saved = images.saved();
   const savedKey = JSON.stringify(saved);
-  useEffect(() => void saveDraft(key, text, saved, revision, revision), [key, text, savedKey]);
+  const writing = useRef(0);
+  useEffect(() => during(writing, saveDraft(key, text, saved, revision.current, revision.current)), [key, text, savedKey]);
+  useDraftFollow(key, { text, images: saved, revision: revision.current }, writing, (d) => {
+    revision.current = d?.revision ?? newRevision();
+    setText(d?.text ?? "");
+    images.reset(d?.text ?? "", d?.images ?? []);
+  });
   return {
     text,
     setText,
     images,
     body: async () => (await images.resolve(text)).trim(),
-    discard: () => void saveDraft(key, "", [], revision, revision),
+    discard: () => void saveDraft(key, "", [], revision.current, revision.current),
   };
 }
+
+/** Counts a box's own write of its draft as on its way until it lands. */
+export function during(writing: { current: number }, write: Promise<unknown>): void {
+  writing.current++;
+  const done = () => void writing.current--;
+  write.then(done, done);
+}
+
+/**
+ * A mounted box follows its stored draft: sent from another tab or device it
+ * empties, and typed there it shows here. A box with a write of its own on its
+ * way (`writing`, set before this is called in an effect) is ahead of the
+ * store and stays as it is: its write follows, and is the later one.
+ */
+export function useDraftFollow(
+  key: string,
+  box: { text: string; images: readonly SavedAttachment[]; revision: string },
+  writing: { current: number },
+  adopt: (d: Draft | null) => void,
+): void {
+  const now = useRef({ box, adopt });
+  now.current = { box, adopt };
+  useEffect(
+    () =>
+      onDraftWork(() => {
+        const { box, adopt } = now.current;
+        const stored = loadDraft(key);
+        const names = tokensIn(stored?.text ?? "");
+        const same = stored
+          ? stored.text === box.text && imageKey(stored.images.filter((i) => names.has(i.n))) === imageKey(box.images)
+          : !box.text.trim() && !box.images.length;
+        // A revision that was sent is no longer the box's, even with a write on its way.
+        if (same || (writing.current > 0 && !draftTaken(key, box.revision))) return;
+        adopt(stored);
+      }),
+    [key],
+  );
+}
+
+const imageKey = (images: readonly SavedAttachment[]): string => images.map((i) => `${i.n}:${i.name}:${i.path}`).join("|");
 
 /**
  * The frame a prompt box and its images share: the border, the focus ring

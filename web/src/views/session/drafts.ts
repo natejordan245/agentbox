@@ -1,14 +1,16 @@
-/** Browser-only work in progress. Taking a draft and recording its pending
- *  submission are one localStorage write. Successful sends retain no text. */
+/** Work in progress in a message box. Taking a draft and recording its pending
+ *  submission are one localStorage write. Successful sends retain no text.
+ *
+ *  A draft is also the server's (src/core/drafts.ts), so one begun on one
+ *  device is finished on another; a pending submission stays this browser's.
+ *  localStorage is the copy a box reads and writes, so typing never waits on
+ *  the network, and each draft's version (`Draft.at`) says which of two copies
+ *  is the later: see "other devices" below. */
 import type { SavedAttachment } from "../../attachments";
-import type { SendReceipt } from "../../../../src/core/types";
+import type { Draft, SendReceipt } from "../../../../src/core/types";
+import { draftWire } from "../../api";
 
-export interface Draft {
-  text: string;
-  images: SavedAttachment[];
-  at: number;
-  revision: string;
-}
+export type { Draft };
 export interface PendingSend {
   id: string;
   sessionId: string;
@@ -27,6 +29,10 @@ interface ComposerWork {
   taken?: string[];
   /** Repeated content cannot be uniquely attributed through a plain-text TUI. */
   attempts?: { id: string; bodyHash: string }[];
+  /** The version at which the draft was sent or emptied here, until the server has heard. */
+  gone?: number;
+  /** The server's version, as it last said: ours past it has yet to go up. */
+  held?: number;
 }
 // A versioned key prevents an older open UI (which prunes every object that
 // is not a Draft) from deleting pending work written by this one.
@@ -69,21 +75,34 @@ function readAll(): Record<string, ComposerWork> {
   return Object.fromEntries(Object.entries(raw).map(([id, v]) => {
     // Upgrade the old draft format without confusing old sent text with a
     // new pending send: only a user submitting it can take a legacy draft.
-    if (v && "text" in v) return [id, { draft: { ...v, revision: v.revision ?? `legacy-${v.at}` } }];
+    if (v && "text" in v) return [id, { draft: { ...v, images: v.images ?? [], revision: v.revision ?? `legacy-${v.at}` } }];
     return [id, v ?? {}];
   }));
 }
+const versionOf = (w: ComposerWork): number => w.draft?.at ?? w.gone ?? 0;
+/** For an edit made now: past every version of the key this browser has seen,
+ *  whatever the clocks of the devices that wrote them say. */
+const nextVersion = (w: ComposerWork): number => Math.max(Date.now(), versionOf(w) + 1, (w.held ?? 0) + 1);
+/** Sent or emptied here: gone at a version of its own, so the server's older copy does not bring it back. */
+function drop(w: ComposerWork): void {
+  if (!w.draft) return;
+  w.gone = nextVersion(w);
+  delete w.draft;
+}
+const imageKey = (images: readonly SavedAttachment[]): string => images.map((i) => `${i.n}:${i.name}:${i.path}`).join("|");
+
 function write(all: Record<string, ComposerWork>): void {
   // Prune drafts, never unresolved submissions. Losing one silently could
   // invite a duplicate or discard the user's only recoverable input.
   const drafts = Object.entries(all).filter(([, w]) => w.draft).sort(([, a], [, b]) => b.draft!.at - a.draft!.at);
   const kept = new Set(drafts.slice(0, 60).map(([id]) => id));
   for (const [id, w] of Object.entries(all)) {
-    if (w.draft && (!kept.has(id) || Date.now() - w.draft.at > AGE_MS)) delete w.draft;
-    if (!w.draft && !w.pending?.length && !w.taken?.length) delete all[id];
+    if (w.draft && (!kept.has(id) || Date.now() - w.draft.at > AGE_MS)) drop(w);
+    if (!w.draft && !w.gone && !w.pending?.length && !w.taken?.length) delete all[id];
   }
   localStorage.setItem(KEY, JSON.stringify(all));
   dispatchEvent(new Event(EVENT));
+  sendSoon();
 }
 export function onDraftWork(fn: () => void): () => void {
   const storage = (e: StorageEvent) => { if (e.key === KEY || e.key === LEGACY_KEY || e.key === null) fn(); };
@@ -135,9 +154,16 @@ export async function saveDraft(id: string, text: string, images: SavedAttachmen
       const all = readAll();
       const w = all[id] ??= {};
       if (w.taken?.includes(revision)) return;
-      if (text.trim() || images.length) w.draft = { text, images, at: Date.now(), revision };
+      const d = w.draft;
+      if (text.trim() || images.length) {
+        // As it was left: its version is when it was last edited, not last shown.
+        if (d?.revision === revision && d.text === text && imageKey(d.images) === imageKey(images)) return;
+        w.draft = { text, images, at: nextVersion(w), revision };
+        delete w.gone;
+      }
       // An empty field in another tab must not erase somebody else's draft.
-      else if (w.draft?.revision === revision || (previousRevision !== undefined && w.draft?.revision === previousRevision)) delete w.draft;
+      else if (d && (d.revision === revision || d.revision === previousRevision)) drop(w);
+      else return;
       write(all);
     });
   } catch { /* Ordinary draft saving remains best effort. Taking one does not. */ }
@@ -150,7 +176,7 @@ export async function beginSend(pending: PendingSend): Promise<void> {
     w.pending = [...(w.pending ?? []), pending];
     w.attempts = [...(w.attempts ?? []), { id: pending.id, bodyHash: pending.bodyHash }];
     w.taken = [...(w.taken ?? []), pending.draft.revision];
-    if (w.draft?.revision === pending.draft.revision) delete w.draft;
+    if (w.draft?.revision === pending.draft.revision) drop(w);
     // Quota/private-mode failures refuse delivery: don't clear an input we
     // cannot recover. No await occurs between taking it and saving it.
     write(all);
@@ -213,8 +239,63 @@ export async function restorePending(sessionId: string, id: string, draft: Draft
     const w = all[sessionId];
     if (!w?.pending?.some((p) => p.id === id && (p.state === "failed" || p.state === "unconfirmed"))) throw new Error("this message is no longer waiting on you");
     if (!unchanged() || (w.draft && w.draft.revision !== previousRevision)) throw new Error("the draft changed; try restoring again");
-    w.draft = draft;
+    w.draft = { ...draft, at: nextVersion(w) };
+    delete w.gone;
     w.pending = w.pending.filter((p) => p.id !== id);
     write(all);
+  });
+}
+
+// ------------------------------------------------------------ other devices
+//
+// The server keeps the later of the copies it is sent, and says what it keeps
+// to every page. A page does the same with what it hears, so all of them end
+// on the copy with the greatest version, in whatever order they were written
+// or came back online.
+
+/** The server's copy of a key, at version `at` (null: its whole list has none). */
+function hear(w: ComposerWork, theirs: Draft | null, at: number | null): void {
+  const sent = !!theirs && !!w.taken?.includes(theirs.revision);
+  // Theirs is the later one. With no version to compare, it is when nothing
+  // here was edited since the server last said what it held.
+  if (!sent && (at === null ? !w.draft || versionOf(w) <= (w.held ?? 0) : at >= versionOf(w))) {
+    if (theirs) w.draft = theirs;
+    else delete w.draft;
+    delete w.gone;
+  }
+  if (at === null) delete w.held;
+  else w.held = at;
+  // A revision this browser sent is never a draft again: it goes from the server too.
+  if (sent && !w.draft) w.gone = nextVersion(w);
+}
+
+let sending: ReturnType<typeof setTimeout> | undefined;
+/** Typing goes up when it pauses, not a key at a time. */
+function sendSoon(): void {
+  clearTimeout(sending);
+  sending = setTimeout(sendOurs, 400);
+}
+/** Every copy here that is later than the server's. One the socket drops is
+ *  still later when the server next says what it holds, and goes again. */
+function sendOurs(): void {
+  clearTimeout(sending);
+  sending = undefined;
+  try {
+    for (const [key, w] of Object.entries(readAll())) if (versionOf(w) > (w.held ?? 0)) draftWire.send(key, w.draft ?? null, versionOf(w));
+  } catch { /* Unreadable storage has nothing to send. */ }
+}
+
+if (typeof window !== "undefined") {
+  draftWire.listen((m) => {
+    void mutate(() => {
+      const all = readAll();
+      if (m.type === "draft") hear((all[m.key] ??= {}), m.draft, m.at);
+      else for (const key of new Set([...Object.keys(all), ...Object.keys(m.drafts)])) hear((all[key] ??= {}), m.drafts[key] ?? null, m.drafts[key]?.at ?? null);
+      write(all);
+    }).catch(() => undefined);
+  });
+  // A phone freezes a page it leaves: what was typed last goes before that.
+  document.addEventListener("visibilitychange", () => {
+    if (document.visibilityState === "hidden" && sending !== undefined) sendOurs();
   });
 }

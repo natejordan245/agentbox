@@ -4,7 +4,7 @@ import { parseWhen } from "../../../src/core/schedule";
 import { runsOn, servesModel } from "../../../src/core/providers/account";
 import { api, type NewSessionInput } from "../api";
 import { PROVIDER_LABEL, PROVIDERS } from "../bits";
-import { AttachButton, useAttachments } from "../attachments";
+import { AttachButton, useDraft } from "../attachments";
 import type { PromptHistoryEntry } from "../lib/prompthistory";
 import { Button, Icon, Modal } from "../components";
 import {
@@ -15,6 +15,7 @@ import {
   noteFolderChoice,
   noteRepoChoice,
   parseWorktreeRef,
+  promptDraftKey,
   promptPrs,
   prsOf,
   rankModels,
@@ -94,7 +95,9 @@ export function NewSession({
   const [wtText, setWtText] = useState("");
   const [devServer, setDevServer] = useState(prefs.devServer ?? false);
   const [path, setPath] = useState(prefs.path ?? "");
-  const [prompt, setPrompt] = useState(prefs.draft ?? "");
+  const promptRef = useRef<HTMLTextAreaElement>(null);
+  // Kept as it is typed, so Cancel keeps it too; a session starting forgets it.
+  const { text: prompt, setText: setPrompt, images, discard } = useDraft(promptDraftKey(project ?? null), promptRef);
   // Closed sessions' too, which the board does not carry: from the server.
   const [history, setHistory] = useState<PromptHistoryEntry[]>([]);
   useEffect(() => {
@@ -140,8 +143,6 @@ export function NewSession({
     if (mode === "schedule") whenRef.current?.focus();
   }, [mode]);
 
-  const promptRef = useRef<HTMLTextAreaElement>(null);
-  const images = useAttachments({ text: prompt, setText: setPrompt, textareaRef: promptRef, initial: prefs.draftImages });
   // After the Modal's own focus handling (child effects run first), so the
   // prompt, not the close button, is where typing lands — at the end of a
   // restored draft.
@@ -390,12 +391,10 @@ export function NewSession({
   }
 
   // Remember everything as it changes, so Cancel keeps it too.
-  const draftImages = images.saved();
-  const draftImagesKey = JSON.stringify(draftImages);
   useEffect(() => {
     // A PR the prompt ticked off is not a preference for next time.
-    savePrefs({ provider, where, repoId, worktree: worktree || wtFromPrompt, devServer, path, scope, perProvider, draft: prompt, draftImages }, project);
-  }, [provider, where, repoId, worktree, wtFromPrompt, devServer, path, scope, perProvider, prompt, draftImagesKey]);
+    savePrefs({ provider, where, repoId, worktree: worktree || wtFromPrompt, devServer, path, scope, perProvider }, project);
+  }, [provider, where, repoId, worktree, wtFromPrompt, devServer, path, scope, perProvider]);
   // Typing `new` is the same as ticking the box again.
   useEffect(() => {
     if (!worktree && wt.kind === "new") {
@@ -475,7 +474,7 @@ export function NewSession({
     try {
       if (mode === "schedule") {
         const sc = await api.createSchedule({ when, spec: input });
-        savePrefs({ provider, where, repoId, worktree: worktree || wtFromPrompt, devServer, path, scope, perProvider }, project);
+        discard();
         onScheduled(sc);
         return;
       }
@@ -483,7 +482,7 @@ export function NewSession({
       if (devTab) devTab.location.href = `/api/sessions/${encodeURIComponent(r.session.id)}/dev/open`;
       noteStarted(r.session);
       if (where === "path") noteFolderChoice(r.session.cwd ?? path.trim());
-      savePrefs({ provider, where, repoId, worktree: worktree || wtFromPrompt, devServer, path, scope, perProvider }, project);
+      discard();
       onCreated(r.session.id);
     } catch (e) {
       devTab?.close();

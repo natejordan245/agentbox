@@ -1871,7 +1871,26 @@ export type ServerMessage =
   /** The server is about to exit to be restarted; the socket closes next
    *  (code 1012). Reconnect promptly rather than backing off. */
   | { type: "restarting" }
+  /** Every unsent draft, by key: on connect. */
+  | { type: "drafts"; drafts: Record<string, Draft> }
+  /** The draft the server took for `key`, or that it is gone as of version
+   *  `at`: to every page. To its sender alone when the server holds one as
+   *  late or later: that one. */
+  | { type: "draft"; key: string; draft: Draft | null; at: number }
   | { type: "error"; message: string };
+
+/** An unsent message, as the box it was typed in keeps it
+ *  (web/src/views/session/drafts.ts) and the server holds it for your other
+ *  devices (src/core/drafts.ts). `at` is its version: when it was last edited,
+ *  and past every version of its key the editing page had seen, so of two
+ *  copies the one with the greater is the later. `images` are uploads
+ *  (src/core/uploads.ts) the text names as `[Image #n]`. */
+export interface Draft {
+  text: string;
+  images: { n: number; name: string; path: string }[];
+  at: number;
+  revision: string;
+}
 
 /** Client → server. A client watches at most one session's timeline. */
 export type ClientMessage =
@@ -1879,6 +1898,9 @@ export type ClientMessage =
    *  holds. The server goes on from there instead of sending the newest page
    *  again, or sends the page with `reset` if the cursor no longer holds. */
   | { type: "watch"; sessionId: string | null; cursor?: string }
+  /** This page's copy of a draft, or that it was sent or emptied here at
+   *  version `at`. Kept when later than the last the server took for `key`. */
+  | { type: "draft"; key: string; draft: Draft | null; at: number }
   | { type: "ping" };
 
 /** An extension and its program (`GET /api/extensions`, src/core/extensions.ts). */

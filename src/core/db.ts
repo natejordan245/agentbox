@@ -523,6 +523,18 @@ const MIGRATIONS: readonly string[] = [
     PRIMARY KEY (repo, number, session_id)
   );
   `,
+  // 45 — unsent drafts, by the key of the box they were typed in, so one
+  // begun on one device is finished on another (src/core/drafts.ts). `at` is
+  // the draft's version; `images` a JSON array of its uploads.
+  `
+  CREATE TABLE IF NOT EXISTS drafts (
+    key      TEXT PRIMARY KEY,
+    text     TEXT NOT NULL,
+    images   TEXT NOT NULL,
+    revision TEXT NOT NULL,
+    at       INTEGER NOT NULL
+  );
+  `,
 ];
 
 function migrate(d: Database) {

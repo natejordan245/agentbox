@@ -49,10 +49,35 @@ export function parseClientMessage(raw: unknown): ParseResult {
       return { ok: true, message: cursor && sessionId ? { type: "watch", sessionId, cursor } : { type: "watch", sessionId } };
     }
 
+    case "draft": {
+      const { key, at } = msg;
+      if (typeof key !== "string" || key === "") return { ok: false, error: "draft.key must be a string" };
+      if (typeof at !== "number" || !Number.isFinite(at)) return { ok: false, error: "draft.at must be a number" };
+      if (msg.draft === null) return { ok: true, message: { type: "draft", key, draft: null, at } };
+      const d = (msg.draft ?? {}) as Record<string, unknown>;
+      const images = Array.isArray(d.images) ? (d.images as Record<string, unknown>[]) : null;
+      if (
+        typeof d.text !== "string" ||
+        typeof d.revision !== "string" ||
+        !images?.every((i) => typeof i?.n === "number" && typeof i.name === "string" && typeof i.path === "string")
+      ) {
+        return { ok: false, error: "draft.draft must be {text, images, revision} or null" };
+      }
+      return {
+        ok: true,
+        message: {
+          type: "draft",
+          key,
+          at,
+          draft: { text: d.text, images: images.map((i) => ({ n: i.n as number, name: i.name as string, path: i.path as string })), at, revision: d.revision },
+        },
+      };
+    }
+
     default:
       return {
         ok: false,
-        error: `unknown message type ${JSON.stringify(msg.type)} — expected "watch" or "ping"`,
+        error: `unknown message type ${JSON.stringify(msg.type)} — expected "watch", "draft" or "ping"`,
       };
   }
 }

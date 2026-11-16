@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type MouseEvent as ReactMouseEvent, type RefObject, type SetStateAction } from "react";
 import type { AccountView, Placement, Session, SkillInfo } from "../../../../src/core/types";
 import { ago, api, fmtRetryAt, fmtTokens, useNow } from "../../api";
-import { AttachButton, AttachFrame, expandImages, tokensIn, useAttachments } from "../../attachments";
+import { AttachButton, AttachFrame, during, expandImages, tokensIn, useAttachments, useDraftFollow } from "../../attachments";
 import { PROVIDER_LABEL } from "../../bits";
 import { Button, Icon } from "../../components";
 import { AccountPicker } from "../newsession/AccountPicker";
@@ -9,7 +9,7 @@ import { useSkillComplete } from "../newsession/skillcomplete";
 import { hrefOf } from "../../route";
 import { shownStatus } from "../../lib/board";
 import { useRecall } from "./recall";
-import { draftTaken, loadDraft, newRevision, onDraftWork, restorePending, saveDraft, submissionHash, type Draft, type PendingSend } from "./drafts";
+import { loadDraft, newRevision, restorePending, saveDraft, submissionHash, type Draft, type PendingSend } from "./drafts";
 import { PendingActions, deliverPending, onEditPending, pendingNote, stuck, useDelivery, usePendingSends, usePendingShown } from "./submissions";
 import { dropEcho } from "./echo";
 import "../newsession.css";
@@ -64,6 +64,8 @@ export function Composer({ session, accounts, skills, textareaRef }: {
     setTextState(next);
   }, []);
   const submitting = useRef(false);
+  /** Writes of this box's draft that have yet to land (`useDraftFollow`). */
+  const writing = useRef(0);
   const { run, busy, error, clear } = useAction();
   /** A voice message is on its way to words. */
   const [hearing, setHearing] = useState(false);
@@ -130,7 +132,9 @@ export function Composer({ session, accounts, skills, textareaRef }: {
     const previousRevision = revision.current;
     const restoredRevision = newRevision();
     const back = merged(p.draft);
-    await restorePending(session.id, p.id, { text: back.text, images: [...images.saved(), ...back.images], at: Date.now(), revision: restoredRevision }, previousRevision, () => revision.current === previousRevision);
+    const restoring = restorePending(session.id, p.id, { text: back.text, images: [...images.saved(), ...back.images], at: Date.now(), revision: restoredRevision }, previousRevision, () => revision.current === previousRevision);
+    during(writing, restoring);
+    await restoring;
     images.restore(back.images);
     revision.current = restoredRevision;
     setTextState(back.text);
@@ -180,20 +184,16 @@ export function Composer({ session, accounts, skills, textareaRef }: {
   useEffect(() => {
     const previous = lastQueuedRevision.current;
     lastQueuedRevision.current = editingRevision;
-    void saveDraft(session.id, text, savedImages, editingRevision, previous);
+    during(writing, saveDraft(session.id, text, savedImages, editingRevision, previous));
   }, [session.id, text, savedKey, editingRevision]);
-  // Taking a revision clears every tab holding that revision, before delivery.
-  // A newer edit has its own revision, even if its text is identical.
-  useEffect(
-    () =>
-      onDraftWork(() => {
-        if (!draftTaken(session.id, revision.current)) return;
-        revision.current = newRevision();
-        setTextState("");
-        images.clear();
-      }),
-    [session.id, images.clear],
-  );
+  // Taking a revision clears every box holding that revision, in any tab or
+  // on any device, before delivery; a draft typed in another shows here. A
+  // newer edit has its own revision, even if its text is identical.
+  useDraftFollow(session.id, { text, images: savedImages, revision: editingRevision }, writing, (d) => {
+    revision.current = d?.revision ?? newRevision();
+    setTextState(d?.text ?? "");
+    images.reset(d?.text ?? "", d?.images ?? []);
+  });
 
   async function submit() {
     if (busy || submitting.current || images.uploading) return;
