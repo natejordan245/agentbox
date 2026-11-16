@@ -82,6 +82,7 @@ import { deepgramKey, voiceConfig, voiceEnvPath } from "../voice/config";
 import { transcribe } from "../voice/deepgram";
 import type { Conversation } from "../voice/conversation";
 import { HttpError, Router, fail, json, readBody } from "./router";
+import { SQUEEZE_MIN_CHARS, squeeze, squeezed } from "./squeeze";
 import { optionalString, parseAnswers, parseSettingsPatch, requireBoolean, requireString } from "./validate";
 import { parseClientMessage } from "./protocol";
 import { TurnIndex } from "../core/turns";
@@ -519,6 +520,11 @@ type SocketData =
       cursor: string | null;
       busy: boolean;
       again: boolean;
+      /** Across the tailnet and able to inflate: its large frames go gzipped. */
+      far: boolean;
+      /** A far socket's frames, one after another: a large one is compressed
+       *  off the thread, and what follows must not pass it. */
+      out: Promise<void>;
     }
   | {
       kind: "term";
@@ -542,8 +548,19 @@ function send(ws: Socket, msg: ServerMessage): void {
     dropClient(ws);
     return;
   }
+  const text = JSON.stringify(msg);
+  const d = ws.data;
+  if (d.kind === "app" && d.far) {
+    d.out = d.out
+      .then(async () => {
+        const frame = text.length < SQUEEZE_MIN_CHARS ? text : await squeeze(text);
+        if (ws.readyState === WebSocket.OPEN) ws.send(frame);
+      })
+      .catch(() => dropClient(ws));
+    return;
+  }
   try {
-    ws.send(JSON.stringify(msg));
+    ws.send(text);
   } catch {
     dropClient(ws);
   }
@@ -2192,7 +2209,8 @@ export async function startServer(): Promise<void> {
 
     if (url.pathname === "/ws") {
       if (!upgrade) return fail("/ws requires a WebSocket upgrade", 426);
-      return srv.upgrade(req, { data: { kind: "app", watching: null, cursor: null, busy: false, again: false } })
+      const far = !!hosts && url.searchParams.get("z") === "1";
+      return srv.upgrade(req, { data: { kind: "app", watching: null, cursor: null, busy: false, again: false, far, out: Promise.resolve() } })
         ? undefined
         : fail("websocket upgrade failed", 500);
     }
@@ -2400,7 +2418,8 @@ async function listenOnTailnet(
             const other = otherUserRefusal(srv.requestIP(req), PORT);
             if (other) return fail(other, 403);
           } else if (!from || !(await peers.isOwner(from))) return fail("only your own Tailscale devices may connect", 403);
-          return handle(req, srv, self.names);
+          const res = await handle(req, srv, self.names);
+          return res && squeezed(req, res);
         },
       });
       console.log(`agentbox listening on ${tls ? "https" : "http"}://${self.dnsName ?? self.ip}:${PORT} (your Tailscale devices)`);

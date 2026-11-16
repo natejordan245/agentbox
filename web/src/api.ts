@@ -484,6 +484,11 @@ export function backoffMs(attempts: number): number {
 }
 
 /** One socket for the page. Every hook rides it; nothing else opens one. */
+/** A frame the server gzipped (src/server/squeeze.ts), as its text. */
+function gunzipped(data: ArrayBuffer): Promise<string> {
+  return new Response(new Blob([data]).stream().pipeThrough(new DecompressionStream("gzip"))).text();
+}
+
 class Wire {
   private ws: WebSocket | null = null;
   private timer: ReturnType<typeof setTimeout> | null = null;
@@ -581,8 +586,13 @@ class Wire {
 
   private open(): void {
     const proto = location.protocol === "https:" ? "wss:" : "ws:";
-    const ws = new WebSocket(`${proto}//${location.host}/ws`);
+    // `z`: this page can inflate. Across the tailnet the server then sends its
+    // large frames gzipped, as binary.
+    const ws = new WebSocket(`${proto}//${location.host}/ws?z=1`);
+    ws.binaryType = "arraybuffer";
     this.ws = ws;
+    // Inflating takes a moment, and a frame must not pass the one before it.
+    let inbox: Promise<void> = Promise.resolve();
 
     ws.onopen = () => {
       if (this.grace) clearTimeout(this.grace);
@@ -595,15 +605,20 @@ class Wire {
       this.heartbeat = setInterval(() => this.send({ type: "ping" }), HEARTBEAT_MS);
     };
 
-    ws.onmessage = (e) => {
-      if (typeof e.data !== "string") return;
-      let msg: ServerMessage;
+    const read = async (data: string | ArrayBuffer): Promise<ServerMessage | null> => {
       try {
-        msg = JSON.parse(e.data) as ServerMessage;
+        return JSON.parse(typeof data === "string" ? data : await gunzipped(data)) as ServerMessage;
       } catch {
         this.setStatus({ lastError: "server sent a malformed message" });
-        return;
+        return null;
       }
+    };
+    ws.onmessage = (e) => {
+      const msg = read(e.data as string | ArrayBuffer);
+      inbox = inbox.then(async () => taken(await msg)).catch((err) => console.error(err));
+    };
+    const taken = (msg: ServerMessage | null) => {
+      if (!msg) return;
       if (msg.type === "error") this.setStatus({ lastError: msg.message });
       else if (msg.type === "build") noteServerBuild(msg.entry);
       else if (msg.type === "behind") noteServerBehind(msg.behind);
