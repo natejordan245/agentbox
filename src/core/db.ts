@@ -853,6 +853,14 @@ export function listSessionRecords(sinceMs = 0): SessionRecord[] {
     .sort((a, b) => b.lastActivityAt - a.lastActivityAt);
 }
 
+/** The ids in all of history that `ref` could mean: itself when it is one,
+ *  else every id it begins. One is a session; the board holds only recent
+ *  and open ones, so the CLI resolves the rest here. */
+export function sessionIdsFor(ref: string): string[] {
+  const byId = cachedRecords();
+  return byId.has(ref) ? [ref] : [...byId.keys()].filter((id) => id.startsWith(ref));
+}
+
 /** Which of `refs` name a session anywhere in history — its agentbox id or
  *  its provider's session id — and the agentbox id each names. The board
  *  holds only recent and open sessions; a link to an old one is resolved

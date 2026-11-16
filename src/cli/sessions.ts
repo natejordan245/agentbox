@@ -56,7 +56,7 @@ export async function me(api: Api): Promise<string | null> {
 /** An id, and "(you)" after it when it is the caller's. */
 export const idYou = (id: string, you: string | null): string => (id === you ? `${id} (you)` : id);
 
-/** The board, or with `all` every session there has been: thousands, and
+/** The open board, or with `all` the closed ones of its window too:
  *  megabytes the server builds and this parses, so only when asked for. */
 async function state(api: Api, all = false): Promise<AppState> {
   return api<AppState>("GET", all ? "/api/state" : "/api/state?open=1");
@@ -71,19 +71,12 @@ export async function resolveIds(api: Api, args: string[], all = false): Promise
     const text = await new Response(Bun.stdin.stream()).text();
     raw = raw.concat(text.split("\n").map((l) => l.trim().split(/\s+/)[0] ?? "").filter(Boolean));
   }
-  // On the board first; a closed one, and a prefix the board alone would
-  // read as unique, are settled by every session there has been.
+  // On the board by its whole id, else from all of history by the server:
+  // a closed one, and a prefix only all of history can call unique.
   const board = await state(api, all);
-  const onBoard = all || raw.every((r) => board.sessions.some((x) => x.id === r));
-  const s = onBoard ? board : await state(api, true);
-  const ids = raw.map((r) => {
-    const exact = s.sessions.find((x) => x.id === r);
-    if (exact) return exact.id;
-    const pre = s.sessions.filter((x) => x.id.startsWith(r));
-    if (pre.length === 1) return pre[0]!.id;
-    throw new Error(pre.length ? `"${r}" matches ${pre.length} sessions` : `no session "${r}"`);
-  });
-  return { ids, sessions: s.sessions, state: s };
+  const rows = await Promise.all(raw.map((r) => board.sessions.find((x) => x.id === r) ?? api<Row>("GET", `/api/sessions/${encodeURIComponent(r)}`)));
+  const off = rows.filter((r) => !board.sessions.includes(r));
+  return { ids: rows.map((r) => r.id), sessions: [...board.sessions, ...off], state: board };
 }
 
 // -------------------------------------------------------------- formatting
@@ -200,7 +193,7 @@ export async function ls(api: Api, args: string[]): Promise<number> {
  *  array for several. */
 export async function show(api: Api, args: string[]): Promise<number> {
   const { flags, rest } = parseArgs(args, [], ["json"]);
-  // Every session there has been: its children are listed closed or not.
+  // The board's closed ones too: its children are listed closed or not.
   const { ids, sessions, state: s0 } = await resolveIds(api, rest, true);
   if (flags.has("json")) {
     const rows = ids.map((id) => sessions.find((s) => s.id === id)!);

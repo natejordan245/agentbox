@@ -49,7 +49,7 @@ import { demoteSkill, listSkills, promoteSkill, readSkillBody, skillRoots, write
 import { containedIn, looksLikeSkillFile, skillMdPath, skillRootDirs } from "./guard";
 import { contextDocs, readContextDoc, writeContextDoc } from "./context";
 import { briefingText } from "../core/providers/briefing";
-import { addRepo, deleteRepo, getDb, getKv, listSessionRecords, resolveSessionRefs, getRepoById, getSettings, setKv, listBtw, listRepos, listSchedules, mergeSettings, saveSettings, setRepoSetup, setRepoWorktreeDefault } from "../core/db";
+import { addRepo, deleteRepo, getDb, getKv, listSessionRecords, resolveSessionRefs, sessionIdsFor, getRepoById, getSettings, setKv, listBtw, listRepos, listSchedules, mergeSettings, saveSettings, setRepoSetup, setRepoWorktreeDefault } from "../core/db";
 import { parseSetup } from "../core/setup";
 import { devServerPage, devServerStatus } from "../core/devserver";
 import { serviceInstalled, installService, lingering } from "../core/service";
@@ -1594,9 +1594,12 @@ const router = new Router(mapError)
     const refs = (await readBody(req)).refs;
     return json(resolveSessionRefs(Array.isArray(refs) ? refs.filter((r): r is string => typeof r === "string").slice(0, 500) : []));
   })
-  // One session by id, closed or long idle: a link straight to it.
+  // One session by id or a prefix of only one, closed or long idle: a link
+  // straight to it, and what the CLI names when the board lacks it.
   .add("GET", "/api/sessions/:id", ({ params }) => {
-    const s = fleet.get(params.id!);
+    const ids = sessionIdsFor(params.id!);
+    if (ids.length > 1) throw new HttpError(409, `"${params.id}" matches ${ids.length} sessions`);
+    const s = fleet.get(ids[0] ?? params.id!);
     return json({ ...s, attention: attentionOf(s, null) });
   })
   .add("GET", "/api/sessions/:id/timeline", async ({ params, url }) => {
