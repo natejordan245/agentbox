@@ -37,6 +37,7 @@ import { yourTime } from "./yourtime";
 import type { AppState, Placement, ProviderId, Session } from "../core/types";
 import { accountProvider } from "../core/providers/account";
 import type { RecoveryReport } from "../core/recovery";
+import type { CpuProfile } from "../server/vitals";
 
 const BASE = serverBase();
 const PROVIDERS: ProviderId[] = ["claude", "codex", "devin", "omp", "opencode", "muse"];
@@ -361,6 +362,18 @@ function pwaDetail(): string {
   return fixed.length ? `patched ${fixed.join(", ")} (Chrome's Wayland app-id bug)` : "ok";
 }
 
+/** `agentbox profile [seconds]`: where the server's one thread spent its time. */
+async function profileServer(arg = "20"): Promise<number> {
+  const seconds = Number(arg);
+  if (!Number.isFinite(seconds) || seconds < 1) throw new Error("usage: agentbox profile [seconds]");
+  const p = await api<CpuProfile>("POST", "/api/profile", { seconds });
+  const table = (rows: CpuProfile["self"]) => rows.map((r) => `${((100 * r.samples) / Math.max(1, p.samples)).toFixed(1).padStart(5)}%  ${r.fn.padEnd(44)} ${r.at}`).join("\n");
+  console.log(`${p.samples} samples at work in ${p.seconds}s (one a millisecond when the machine has a core to spare)\n`);
+  console.log(`where the thread was:\n${table(p.self)}\n`);
+  console.log(`what it was working for (callers included):\n${table(p.total)}`);
+  return 0;
+}
+
 async function doctor(): Promise<number> {
   ensureDirs();
   const deps = await dependencies(true);
@@ -562,6 +575,8 @@ scheduled sessions (one-time ones show in the app as sessions; recurring ones in
                         the bridge that runs other providers' models in devin
                         (docs/devin-bridge.md); check tests it end to end
   doctor                check that everything agentbox needs is present
+  profile [seconds]     sample the running server (20s) and say which functions
+                        its time went to: what to run when the board is slow
   serve-from-commit [on|off|status]
                         on: a restart serves the checkout's HEAD commit from
                         $AGENTBOX_HOME/live, never uncommitted edits
@@ -723,6 +738,8 @@ export async function main(argv: string[]): Promise<number | null> {
     switch (cmd) {
       case "serve": {
         // Run the checkout's HEAD commit, not its working tree (src/core/snapshot.ts).
+        const { stampLogs } = await import("../server/vitals");
+        stampLogs();
         const { prepareServe } = await import("../core/snapshot");
         const snapshot = prepareServe(packageRoot, (line) => console.log(`agentbox: ${line}`));
         if (snapshot) process.execve!(process.execPath, [process.execPath, join(snapshot, "bin", "agentbox"), ...argv], process.env);
@@ -856,6 +873,8 @@ export async function main(argv: string[]): Promise<number | null> {
         return await devinBridge(argv[1]);
       case "doctor":
         return await doctor();
+      case "profile":
+        return await profileServer(argv[1]);
       case "serve-from-commit":
         return serveFromCommit(argv[1]);
       case "integrate":

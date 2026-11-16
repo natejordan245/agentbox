@@ -11,3 +11,7 @@ branch, `agentbox integrate <branch> --restart` does all of that. With
 Debugging: `~/.local/share/agentbox/logs/server.log`; the database is
 `~/.local/share/agentbox/box.db`; `tmux -L agentbox ls` lists the sessions
 agentbox is running. `bun bin/agentbox doctor` checks dependencies.
+
+When the board, the CLI or a terminal is slow, the server's one thread is busy:
+`agentbox profile` samples it and names the functions, and the log's `held`
+and `loop_stalled` lines say what kept it and how often (`src/server/vitals.ts`).

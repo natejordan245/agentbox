@@ -145,6 +145,12 @@ edits unstaged.
 - **`agentbox serve` holds its port from its first line.** A CLI that finds
   the server slow starts another; that one must fail at once, not run a
   second fleet.
+- **Nothing holds the server's thread.** It is one thread for every page,
+  terminal and CLI call, so a second of work on it is a second of all of them
+  frozen. A request reads what is already worked out; work that scales with
+  history is paged in SQL or done off the thread; a process is awaited, never
+  `spawnSync`. The log names what held it (`held`, `loop_stalled`), and
+  `agentbox profile` says where the time went (`src/server/vitals.ts`).
 - **Address tmux by session name**, never by pane id (`%12` is renumbered when
   the tmux server restarts). `src/core/tmux.ts` is the only thing that runs
   tmux.

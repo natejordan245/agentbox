@@ -88,6 +88,7 @@ import { rewindGoalOf } from "../core/providers/claude-rewind";
 import { loadTurnState, saveTurnState } from "../core/readercache";
 import { canSeek, seekBottom, seekTurn, whereOnScreen, type SeekIO } from "../core/termseek";
 import { builtEntry, fileResponse, notBuiltPage, resolveStatic } from "./static";
+import { cpuProfile, held, stampLogs, watchLoop } from "./vitals";
 import { adapters } from "../core/providers";
 import { sendAsAgent } from "../core/sendguard";
 import { SendReceiptConflict, sendReceipt, submitWithReceipt } from "../core/send-receipts";
@@ -604,8 +605,10 @@ function scheduleHot(): void {
   hotTimer = setTimeout(() => {
     hotTimer = null;
     if (clients.size === 0) return;
-    const frame = hotDelta();
-    if (frame) broadcast(frame);
+    held("hot frame", () => {
+      const frame = hotDelta();
+      if (frame) broadcast(frame);
+    });
   }, HOT_COALESCE_MS);
 }
 
@@ -637,15 +640,17 @@ function coldIn(ms: number): void {
   coldTimer = setTimeout(() => {
     coldTimer = null;
     if (clients.size === 0) return;
-    const state = coldState();
-    const changed: Partial<ColdState> = {};
-    for (const [key, value] of Object.entries(state) as [keyof ColdState, unknown][]) {
-      const json = JSON.stringify(value);
-      if (sentCold.get(key) === json) continue;
-      sentCold.set(key, json);
-      (changed as Record<string, unknown>)[key] = value;
-    }
-    if (Object.keys(changed).length > 0) broadcast({ type: "coldDelta", state: changed });
+    held("cold frame", () => {
+      const state = coldState();
+      const changed: Partial<ColdState> = {};
+      for (const [key, value] of Object.entries(state) as [keyof ColdState, unknown][]) {
+        const json = JSON.stringify(value);
+        if (sentCold.get(key) === json) continue;
+        sentCold.set(key, json);
+        (changed as Record<string, unknown>)[key] = value;
+      }
+      if (Object.keys(changed).length > 0) broadcast({ type: "coldDelta", state: changed });
+    });
   }, ms);
 }
 
@@ -855,6 +860,12 @@ const fromThisMachine = new WeakSet<Request>();
 const router = new Router(mapError)
   .add("GET", "/api/state", ({ url }) => stateResponse(url.searchParams.get("open") === "1"))
   .add("GET", "/api/prompts", () => json(fleet.openingPrompts(PROMPT_HISTORY)))
+  .add("POST", "/api/profile", async ({ req }) => {
+    const seconds = Math.max(1, Math.min(300, Number((await readBody(req)).seconds) || 20));
+    const sampled = await cpuProfile(seconds);
+    if (!sampled) throw new HttpError(409, "a profile is already running");
+    return json(sampled);
+  })
   .add("GET", "/api/voice", () => json(voice.status()))
   // The Update button, when the checkout has newer commits: the service
   // restarts itself onto them. Started after the answer has gone out.
@@ -2064,6 +2075,8 @@ function welcome(ws: Socket): void {
 }
 
 export async function startServer(): Promise<void> {
+  stampLogs();
+  watchLoop();
   // Hold the port through startup, which takes a while on a busy machine. A
   // CLI that finds the server slow to answer starts another; found busy only at
   // Bun.serve, that one would linger with a whole second fleet ticking in it.
@@ -2123,7 +2136,7 @@ export async function startServer(): Promise<void> {
         } else d.conv = r;
         return;
       }
-      if (booted) welcome(ws);
+      if (booted) held("welcome", () => welcome(ws));
       else {
         waiting.add(ws);
         send(ws, { type: "starting", ...startupProgress() });
@@ -2195,9 +2208,9 @@ export async function startServer(): Promise<void> {
       });
     }
     // A search reads every transcript, minutes on a loaded machine, and sends
-    // nothing until it is done: the idle timeout would cut it.
-    if (url.pathname === "/api/grep") srv.timeout(req, 0);
-    return router.handle(req);
+    // nothing until it is done: the idle timeout would cut it. So does a profile.
+    if (url.pathname === "/api/grep" || url.pathname === "/api/profile") srv.timeout(req, 0);
+    return held(`${req.method} ${url.pathname}`, () => router.handle(req));
   };
 
   // Serve from the start, before the accounts and the first pass, which on
