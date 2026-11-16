@@ -6,7 +6,7 @@ import { join } from "node:path";
 import { ApiError, type Api } from "../client";
 import { isLaunchdJob, startLaunchdJob, stopLaunchdJob } from "../core/job-launchd";
 import { agentboxHome } from "../core/paths";
-import { describe, span } from "../core/waits";
+import { describe, span } from "../core/waitwords";
 import type { Wait, WaitSpec } from "../core/types";
 import { parseArgs } from "./sessions";
 

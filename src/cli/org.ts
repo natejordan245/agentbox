@@ -5,7 +5,6 @@ import { existsSync } from "node:fs";
 import type { Api } from "../client";
 import { inviteOf, orgConfigPath, parseInvite, readOrg, writeOrg, type OrgConfig } from "../core/org/config";
 import { newOrgKey } from "../core/org/seal";
-import { closeStore, storeDb } from "../core/org/store";
 import type { AppState, OrgStatus } from "../core/types";
 import { parseArgs } from "./sessions";
 
@@ -25,6 +24,9 @@ agentbox org unshare <account>               take it out of the pool: the org's 
 agentbox org reclaim <account>               take its login out of the org's store altogether (to leave the org)`;
 
 async function reach(org: OrgConfig): Promise<void> {
+  // Loaded here, by the two commands that reach the store: its driver is
+  // most of what a CLI call would otherwise spend starting.
+  const { closeStore, storeDb } = await import("../core/org/store");
   try {
     await (await storeDb())!.command({ ping: 1 });
   } catch (e) {

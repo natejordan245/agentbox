@@ -35,6 +35,7 @@ import { assignedPrHolder, prReleased, prReleasedLine } from "./prclaims";
 import { FleetError, type Fleet } from "./fleet";
 import { Held, logTail, prKey, readJob, readPrs, readRun, readUntil, type JobRead, type PrRead, type RunRead } from "./waitreads";
 import type { Session, Wait, WaitEnd, WaitSpec, WaitView } from "./types";
+import { describe, short, span } from "./waitwords";
 
 const TICK_MS = 15_000;
 /** How often the pull requests waited on are read: one request for all of them. */
@@ -69,41 +70,8 @@ export type Look = { end: Ending; memo?: Wait["memo"] } | { seen: string; memo?:
 // Merge authorization belongs to the steward, not the owner waiting for CI/review.
 const isMergeGate = (name: string): boolean => name.trim().toLowerCase() === "merge gate";
 
-const short = (sha: string): string => sha.slice(0, 10);
 const sameCommit = (a: string, b: string): boolean => a.length > 0 && b.length > 0 && (a.startsWith(b) || b.startsWith(a));
 const list = (names: string[], max = 8): string => (names.length > max ? `${names.slice(0, max).join(", ")} and ${names.length - max} more` : names.join(", "));
-
-export function span(ms: number): string {
-  const m = Math.max(1, Math.round(ms / 60_000));
-  return m < 60 ? `${m}m` : m < 48 * 60 ? `${Math.floor(m / 60)}h${m % 60 ? ` ${m % 60}m` : ""}` : `${Math.round(m / 1440)}d`;
-}
-
-const oneLine = (s: string, max: number): string => {
-  const t = s.replace(/\s+/g, " ").trim();
-  return t.length > max ? `${t.slice(0, max)}…` : t;
-};
-
-/** `PR #8883: Build, Typecheck on 0ab9de7654`: what a wait is for, in a line. */
-export function describe(spec: WaitSpec): string {
-  switch (spec.kind) {
-    case "pr": {
-      if (spec.feedback) return `PR #${spec.number}: new review feedback or failed checks on ${short(spec.head!)}`;
-      if (spec.merged) return `PR #${spec.number} merging${spec.head ? ` from ${short(spec.head)}` : ""}`;
-      const what = oneLine([...(spec.all ? ["every check"] : []), ...spec.checks].join(", "), 120);
-      return `PR #${spec.number}: ${what}${spec.head ? ` on ${short(spec.head)}` : ""}`;
-    }
-    case "run":
-      return `run ${spec.run} of ${spec.repo}`;
-    case "job":
-      return `job ${oneLine(spec.command, 60)}`;
-    case "session":
-      return `session ${spec.ids.join(", ")}`;
-    case "until":
-      return `until ${oneLine(spec.cmd, 60)}`;
-    case "time":
-      return "a time";
-  }
-}
 
 /** A wait as asked for over HTTP, made whole or refused in words. */
 export function parseSpec(raw: unknown): WaitSpec {

@@ -65,7 +65,8 @@ import { branchOnDisk, createWorktree, detachedWorktree, repoRootOf, worktreeFor
 import { setUpWorktree } from "./setup";
 import { startDevServer, stopDevServer } from "./devserver";
 import { ensureCheckout } from "./worktrees";
-import { describe as describeWait, TELL_FOR_MS } from "./waits";
+import { TELL_FOR_MS } from "./waits";
+import { describe as describeWait } from "./waitwords";
 import { openAsks } from "./cards";
 import { prReleaseLine, prReleaseTold, unfinishedClaims } from "./prclaims";
 import { attachArgv, tmuxName, Unsubmitted, type NewSession, type PaneInfo } from "./tmux";

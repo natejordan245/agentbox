@@ -23,7 +23,6 @@ import { deriveIdentity, ensureUserEnv, userEnvPath } from "../core/user";
 import { installService, serviceInstalled, lingering, startService, stopService } from "../core/service";
 import { voiceConfig } from "../voice/config";
 import { pwaInstalled } from "../core/pwa";
-import { identify } from "../core/accounts/identity";
 import { onboardingItems } from "../core/onboarding";
 import * as verbs from "./sessions";
 import * as schedules from "./schedules";
@@ -325,6 +324,7 @@ async function onboard(): Promise<number> {
   // not logged in.
   const deps = await dependencies(false);
   const accounts = listAccounts();
+  const { identify } = await import("../core/accounts/identity");
   const identities = await Promise.allSettled(accounts.map((a) => identify(a)));
   const items = onboardingItems({
     identity,

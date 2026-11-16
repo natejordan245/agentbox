@@ -7,7 +7,7 @@ import { CHANGE_KINDS, ChangeWatcher, changeLine, rowsVersion, type ChangeKind, 
 import { accountProvider } from "../core/providers/account";
 import { agentAncestor, stillRunning } from "../core/providers/procs";
 import type { AppState, Closed, GrepHit, OrgReadEvent, Session, SessionDiff, TimelineEvent, TimelinePage, Wait } from "../core/types";
-import { describe } from "../core/waits";
+import { describe } from "../core/waitwords";
 
 type Row = AppState["sessions"][number];
 
