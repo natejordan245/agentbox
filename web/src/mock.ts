@@ -76,7 +76,7 @@ const settings: AgentSettings = {
   autoApprove: false,
   parkIdleMin: 60,
   reclaimNightly: false,
-  models: { claude: "claude-fable-5-1", codex: "gpt-5.4-codex", devin: "", omp: "", opencode: "", muse: "" },
+  models: { claude: "claude-fable-5-1", codex: "gpt-5.4-codex", devin: "", omp: "", opencode: "", muse: "", dsmin: "" },
   retiredModels: {},
   scope: "personal",
   balancer: {
@@ -715,6 +715,7 @@ const MOCK_MODELS: Record<ProviderId, ModelOption[]> = {
   ],
   omp: [{ id: "opencode-go/deepseek-flash", label: "DeepSeek V4.1 Flash", releasedAt: "2026-09-10" }],
   muse: [{ id: "muse-spark-1.3", label: "Muse Spark 1.3", releasedAt: "2026-09-02" }],
+  dsmin: [{ id: "morph/morph-dsv41flash-1017", label: "Morph DeepSeek V4.1 Flash 1017", releasedAt: null }],
   opencode: [{ id: "opencode-go/deepseek-v4.1-flash", label: "DeepSeek V4.1 Flash", releasedAt: "2026-09-10" }],
   devin: [
     { id: "swe", label: "SWE-2 (latest)", releasedAt: null },

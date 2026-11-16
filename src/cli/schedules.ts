@@ -8,7 +8,7 @@ import { describeRule, isRecurring, until } from "../core/schedule";
 import type { AppState, ProviderId, Schedule } from "../core/types";
 import { parseArgs } from "./sessions";
 
-const PROVIDERS: ProviderId[] = ["claude", "codex", "devin", "omp", "opencode", "muse"];
+const PROVIDERS: ProviderId[] = ["claude", "codex", "devin", "omp", "opencode", "muse", "dsmin"];
 const str = (v: string | true | undefined): string | undefined => (typeof v === "string" ? v : undefined);
 
 /** `agentbox schedule <when> [--provider claude] [--fallback omp,codex] [--cwd DIR] [--account A] [--model M] [--effort E] [--name N]

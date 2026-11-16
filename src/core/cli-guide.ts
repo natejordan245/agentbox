@@ -116,7 +116,7 @@ why). Arming the same wait twice is one wait.
                                     # Refused when no other account can take it
     agentbox adopt <id>... --detach # move a session from another terminal into agentbox
     agentbox label <id> 'name'      # rename it on the board
-    agentbox claude|codex|omp|opencode|devin|muse --detach [--account X] [--model M] 'prompt'   # start one, from the directory it should work in
+    agentbox claude|codex|omp|opencode|devin|muse|dsmin --detach [--account X] [--model M] 'prompt'   # start one, from the directory it should work in
                                     # --repo owner/name [--ref REF]: in that registered repo instead,
                                     # at REF in a detached worktree of its own
                                     # --org / --personal: on the org's pooled accounts, where

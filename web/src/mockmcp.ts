@@ -53,7 +53,7 @@ const AGENTS: McpState["agents"] = [
 
 function reach(s: Saved): McpReach[] {
   return AGENTS.map(({ provider, installed, supported }): McpReach => {
-    const label: Record<ProviderId, string> = { claude: "Claude", codex: "Codex", opencode: "opencode", muse: "Muse Code", devin: "Devin", omp: "omp" };
+    const label: Record<ProviderId, string> = { claude: "Claude", codex: "Codex", opencode: "opencode", muse: "Muse Code", devin: "Devin", omp: "omp", dsmin: "dsmin" };
     if (!supported) return { provider, state: "unsupported", detail: `agentbox does not pass global servers to ${label[provider]} sessions yet` };
     if (!installed) return { provider, state: "unsupported", detail: `${label[provider]} is not installed` };
     if (provider === "claude" && s.name === "github") return { provider, state: "own", detail: "Claude keeps its enabled native server, even when the global entry is off" };

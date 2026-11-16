@@ -166,7 +166,7 @@ export async function runMcp(base: string): Promise<void> {
         "(or `account`, a label, if given). " +
         "Returns the new session's id and why it went to that account.",
       inputSchema: {
-        provider: z.enum(["claude", "codex", "devin", "omp", "opencode", "muse"]),
+        provider: z.enum(["claude", "codex", "devin", "omp", "opencode", "muse", "dsmin"]),
         cwd: z.string().describe("Absolute path of the directory to work in"),
         prompt: z.string().min(1),
         account: z.string().optional().describe("Account label to force; omit to let the balancer choose"),

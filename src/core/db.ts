@@ -1519,7 +1519,7 @@ const DEFAULT_SETTINGS: AgentSettings = {
   autoApprove: true,
   parkIdleMin: 60,
   reclaimNightly: false,
-  models: { claude: "", codex: "", devin: "", omp: "", opencode: "", muse: "" },
+  models: { claude: "", codex: "", devin: "", omp: "", opencode: "", muse: "", dsmin: "" },
   retiredModels: {},
   scope: "personal",
   balancer: DEFAULT_BALANCER,

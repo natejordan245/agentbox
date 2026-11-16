@@ -1,7 +1,7 @@
 # agentbox
 
 One place for every coding-agent session on this machine — **Claude Code,
-Codex, Devin, omp, opencode and Muse Code** — across every subscription you're logged into.
+Codex, Devin, omp, opencode, Muse Code and dsmin** — across every subscription you're logged into.
 
 ![A Claude session's timeline, with its subagents and the rest of the fleet in the list beside it](docs/screenshots/timeline.png)
 

@@ -1,13 +1,13 @@
 import type { AccountProvider, ProviderId, ServiceId } from "../types";
 
-/** Whose accounts a provider's sessions run on. opencode has no login of its
- *  own here: it runs on OpenCode Go, which omp's Go accounts are sign-ins to
- *  and read usage for, so an opencode session is placed on, pinned to and
- *  metered against one of those accounts, by the same balancer as omp's. Its own
- *  module, free of Node, so the CLI, the MCP servers and the board can ask
- *  without loading adapters. */
+/** Whose accounts a provider's sessions run on. opencode and dsmin have no
+ *  login of their own here: opencode runs on OpenCode Go and dsmin on Morph,
+ *  which omp's accounts are sign-ins and keys to and read usage for, so their
+ *  sessions are placed on, pinned to and metered against those accounts, by
+ *  the same balancer as omp's. Its own module, free of Node, so the CLI, the
+ *  MCP servers and the board can ask without loading adapters. */
 export function accountProvider(p: ProviderId): AccountProvider {
-  return p === "opencode" ? "omp" : p;
+  return p === "opencode" || p === "dsmin" ? "omp" : p;
 }
 
 /** The providers whose logins an org can pool (docs/org.md): claude, codex
@@ -80,7 +80,7 @@ export const SERVICES: readonly ModelService[] = [
   {
     id: "morph",
     label: "Morph",
-    harnesses: ["omp"],
+    harnesses: ["omp", "dsmin"],
     login: "api-key",
     providers: ["morph"],
     keyEnv: "MORPH_API_KEY",

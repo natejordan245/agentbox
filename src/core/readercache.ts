@@ -31,6 +31,7 @@ const READER_ROOTS: Record<ProviderId, string[]> = {
   omp: ["providers/omp.ts"],
   opencode: ["providers/opencode.ts"],
   muse: ["providers/muse.ts", "providers/muse-transcript.ts"],
+  dsmin: ["providers/dsmin.ts", "providers/dsmin-transcript.ts"],
 };
 
 /** Saved states of transcripts nobody has read in this long are deleted. */

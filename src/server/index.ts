@@ -132,7 +132,7 @@ const BUILD_POLL_MS = 2_000;
 const TIMELINE_PAGE = 200;
 /** Opening prompts the new-session box can recall. */
 const PROMPT_HISTORY = 1_000;
-const PROVIDERS: ProviderId[] = ["claude", "codex", "devin", "omp", "opencode", "muse"];
+const PROVIDERS: ProviderId[] = ["claude", "codex", "devin", "omp", "opencode", "muse", "dsmin"];
 
 // ------------------------------------------------------------- the pieces
 
@@ -868,6 +868,7 @@ const providers = (v: unknown): ProviderId[] => {
 const accountProvider = (v: unknown): AccountProvider => {
   const p = provider(v);
   if (p === "opencode") throw new HttpError(400, "opencode has no accounts of its own: it runs on the OpenCode Go accounts, as omp does");
+  if (p === "dsmin") throw new HttpError(400, "dsmin has no accounts of its own: it runs on the Morph accounts, as omp does");
   return p;
 };
 

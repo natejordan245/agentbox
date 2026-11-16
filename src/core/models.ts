@@ -223,10 +223,10 @@ const OMP_DEV_PROVIDER: Record<string, string> = { "opencode-zen": "opencode", "
 
 /** The account's: the blocks its service sells, and those no service here
  *  sells, which run on whatever key omp holds for them. */
-function ompModels(account: Account, dev: ModelsDev): ModelOption[] {
+function ompModels(account: Account, dev: ModelsDev, harness: ProviderId = "omp"): ModelOption[] {
   const dir = agentDir();
   const yml = ompModelsConfig(dir);
-  const providers = Object.entries(yml?.providers ?? {}).filter(([block]) => accountServes(account, "omp", `${block}/`));
+  const providers = Object.entries(yml?.providers ?? {}).filter(([block]) => accountServes(account, harness, `${block}/`));
   if (providers.length === 0) return [];
 
   const catalog = ompModelCatalog(dir);
@@ -421,6 +421,8 @@ export async function modelOptions(account: Account, provider: ProviderId = acco
   if (account.provider === "devin") return devinModels(account);
   const dev = await modelsDev();
   if (provider === "opencode") return opencodeModels(dev);
+  // dsmin speaks to Morph as omp does, so it offers what omp's `morph` block declares.
+  if (provider === "dsmin") return ompModels(account, dev, "dsmin");
   switch (account.provider) {
     case "claude":
       return claudeModels(account, dev);

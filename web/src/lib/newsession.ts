@@ -139,6 +139,8 @@ const SKILL_SOURCES: Record<ProviderId, readonly SkillSource[] | null> = {
   devin: null,
   opencode: null,
   muse: null,
+  // One bash tool and a one-line system prompt: it reads no skills.
+  dsmin: [],
 };
 
 /** The registered repo a session runs in (a worktree's `repoRoot` is its main

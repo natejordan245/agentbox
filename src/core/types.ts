@@ -12,13 +12,13 @@ import type { UserIdentity } from "./user";
 
 // -------------------------------------------------------------- providers
 
-export type ProviderId = "claude" | "codex" | "devin" | "omp" | "opencode" | "muse";
+export type ProviderId = "claude" | "codex" | "devin" | "omp" | "opencode" | "muse" | "dsmin";
 
 /** The providers that hold accounts. opencode holds none of its own: it runs
  *  on OpenCode Go, which omp's Go accounts are sign-ins to and report usage
  *  for, so its sessions sit on those accounts and share their balancer
  *  (`accountProvider` and `SERVICES` in providers/account.ts). */
-export type AccountProvider = Exclude<ProviderId, "opencode">;
+export type AccountProvider = Exclude<ProviderId, "opencode" | "dsmin">;
 
 // --------------------------------------------------------------- accounts
 

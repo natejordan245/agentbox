@@ -502,6 +502,15 @@ const SPEC: Record<ProviderId, Spec> = {
     projectFiles: DEVIN_LOCAL.map((f) => `.devin/${f}`),
     read: jsonServers,
   },
+  dsmin: {
+    label: "dsmin", shared: true,
+    how: "Takes none: one bash tool and nothing else, as DeepSeek's Minimal mode",
+    own: () => [],
+    layer: () => ({}),
+    userFiles: () => [],
+    projectFiles: [],
+    read: () => [],
+  },
   omp: {
     label: "omp", shared: true,
     how: "Adds an MCP extension alongside the active profile and native config",

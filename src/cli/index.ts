@@ -39,7 +39,7 @@ import type { RecoveryReport } from "../core/recovery";
 import type { CpuProfile } from "../server/vitals";
 
 const BASE = serverBase();
-const PROVIDERS: ProviderId[] = ["claude", "codex", "devin", "omp", "opencode", "muse"];
+const PROVIDERS: ProviderId[] = ["claude", "codex", "devin", "omp", "opencode", "muse", "dsmin"];
 
 // ------------------------------------------------------------------ client
 
@@ -451,7 +451,7 @@ const USAGE = `usage: agentbox <command>
   serve                 run the server on port ${DEFAULT_PORT} (default command)
   start                 start the backend in the background, if needed
   service install       keep the backend available at login (macOS) or boot (Linux)
-  claude|codex|devin|omp|opencode|muse [--account NAME] [--model M] [--effort E] [--parent ID] [--detach]
+  claude|codex|devin|omp|opencode|muse|dsmin [--account NAME] [--model M] [--effort E] [--parent ID] [--detach]
          [--org|--personal] [--repo OWNER/NAME [--ref REF]] [--worktree | --branch B | --into PR] [prompt…]
                         start a session here and attach this terminal to it
                         (detach: Ctrl-b d); agentbox picks the account;
@@ -774,6 +774,7 @@ export async function main(argv: string[]): Promise<number | null> {
       case "omp":
       case "opencode":
       case "muse":
+      case "dsmin":
         return await startSession(cmd, argv.slice(1));
       case "ls":
       case "list":

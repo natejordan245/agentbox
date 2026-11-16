@@ -254,7 +254,7 @@ export interface ProcessRef {
   startedAt: number;
 }
 
-const AGENT_CLIS: readonly ProviderId[] = ["claude", "codex", "devin", "omp", "opencode", "muse"];
+const AGENT_CLIS: readonly ProviderId[] = ["claude", "codex", "devin", "omp", "opencode", "muse", "dsmin"];
 
 /** The nearest ancestor of this process that runs an agent CLI. */
 export function agentAncestor(): ProcessRef | null {
