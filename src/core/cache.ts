@@ -94,7 +94,13 @@ export function keepWarmPlan(
 
 /** The keep-warm message: the work it waits on, and that nothing has
  *  happened. Answered in a line, which the board then shows as its last
- *  word, so the line should say what it is waiting on. */
+ *  word, so the line should say what it is waiting on.
+ *
+ *  Only the session knows whether it still wants that work, so it is asked,
+ *  and one that does not stops it: that ends the wait and lets the session
+ *  be parked. Told only to say what it waited on, a session whose turn had
+ *  ended on a question for you said eight times over that the search still
+ *  running was a leftover it did not need, and was kept up 15 hours by it. */
 export function keepWarmNote(work: string): string {
-  return `[agentbox: keeping this session's prompt cache warm while it waits (${work}); nothing has finished yet. Reply with one short line saying what you are still waiting on, and do nothing else: you will be told when it finishes.]`;
+  return `[agentbox: keeping this session's prompt cache warm while it waits (${work}); nothing has finished yet. If you are still waiting on that, reply with one short line saying what you are waiting on, and do nothing else: you will be told when it finishes. If you no longer need it, stop it and say so in one line: it is what keeps this session running, and this message comes every hour while it does.]`;
 }
