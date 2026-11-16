@@ -902,10 +902,9 @@ export function resolveSessionRefs(refs: readonly string[]): Record<string, stri
 
 /** Every closed session, the most recently closed first. */
 export function listClosedRecords(): SessionRecord[] {
-  const rows = getDb()
-    .query("SELECT * FROM sessions WHERE archived_at IS NOT NULL ORDER BY archived_at DESC, id DESC")
-    .all() as Row[];
-  return rows.map(rowToRecord);
+  return [...cachedRecords().values()]
+    .filter((r) => r.archivedAt !== null)
+    .sort((a, b) => b.archivedAt! - a.archivedAt! || (a.id < b.id ? 1 : a.id > b.id ? -1 : 0));
 }
 
 // ------------------------------------------------------------------ waits

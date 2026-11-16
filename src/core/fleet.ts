@@ -2719,10 +2719,16 @@ export class Fleet extends EventEmitter {
    */
   closed(q: string, offset: number, limit: number, include?: (s: Session) => boolean): { sessions: Session[]; total: number } {
     const needle = q.trim().toLowerCase();
+    const view = (rec: SessionRecord): Session => (this.views.get(rec.id) ?? this.viewOf(rec, this.now()))!;
+    // (One whose transcript is ignored has no view.)
+    const shown = listClosedRecords().filter((r) => !(r.transcriptPath && this.ignored.has(r.transcriptPath)));
+    // With nothing to match, only the page is drawn: a view of every closed
+    // session there has been holds the thread most of a second.
+    if (!needle && !include) return { sessions: shown.slice(offset, offset + limit).map(view), total: shown.length };
     const all: Session[] = [];
-    for (const rec of listClosedRecords()) {
-      const s = this.views.get(rec.id) ?? this.viewOf(rec, this.now());
-      if (!s || (include && !include(s))) continue;
+    for (const rec of shown) {
+      const s = view(rec);
+      if (include && !include(s)) continue;
       if (needle && ![titleOf(s), s.label, s.title, s.cwd, s.branch, s.id, s.model, s.provider].some((x) => x?.toLowerCase().includes(needle))) continue;
       all.push(s);
     }
