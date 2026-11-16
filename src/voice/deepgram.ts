@@ -49,7 +49,7 @@ export class Listener {
   private ready = false;
   private chunk = new Uint8Array(FLUX_CHUNK_BYTES);
   private filled = 0;
-  private queued: Uint8Array[] = [];
+  private queued: Uint8Array<ArrayBuffer>[] = [];
   private wanted = false;
   private retry: ReturnType<typeof setTimeout> | null = null;
 

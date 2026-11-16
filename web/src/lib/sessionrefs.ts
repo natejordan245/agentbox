@@ -82,7 +82,7 @@ export function sessionRefs(text: string, index: SessionIndex): SessionRef[] {
   const out: SessionRef[] = [];
   for (const m of text.matchAll(compile(index))) {
     const g = m.groups ?? {};
-    const id = g.tmid ?? g.wtid ?? (g.pv ? (index.provider.get(g.pv) ?? null) : null) ?? g.boxid ?? null;
+    const id = g.tmid ?? g.wtid ?? (g.pv ? index.provider.get(g.pv) : undefined) ?? g.boxid;
     if (!id || !index.ids.has(id)) continue;
     out.push({ start: m.index!, end: m.index! + m[0].length, id });
   }
