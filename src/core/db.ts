@@ -535,6 +535,16 @@ const MIGRATIONS: readonly string[] = [
     at       INTEGER NOT NULL
   );
   `,
+  // 46 — an answer is delivered once its asker replies to the prompt that
+  // carried it, which that session's later prompts would take back, so it is
+  // written down (src/core/cards.ts). The answers read by the rule until now,
+  // a model call after the typing, are delivered.
+  `
+  UPDATE cards SET delivered_at = typed_at WHERE state = 'answered' AND typed_at IS NOT NULL AND delivered_at IS NULL
+    AND COALESCE((SELECT json_extract(facts, '$.lastPromptAt') >= cards.typed_at
+      AND COALESCE(json_extract(facts, '$.lastTurnAt'), json_extract(facts, '$.lastPromptAt')) >= cards.typed_at
+      FROM sessions WHERE sessions.id = cards.session_id), 0);
+  `,
 ];
 
 function migrate(d: Database) {

@@ -13,8 +13,8 @@
  * taken back, or less when the app stops offering the undo (`send`); once
  * typed it cannot. A parked asker starts resuming the moment it is answered. A session with a decision open holds it
  * as it would a wait (`openAsks`): it may be parked, but it does not close
- * itself. Typed is not read: the answer is delivered once the asker has taken
- * a turn on it (`TAKEN`). Until then, and for good when the asker is gone, you
+ * itself. Typed is not read: the answer is delivered once the asker has
+ * replied to it (`TAKEN`). Until then, and for good when the asker is gone, you
  * closed it, or it closes before reading it, the answer waits on the card
  * (`unread`), for whichever session asks (`agentbox card list --answered
  * --unread`) and says it has it (`card ack`). A session handed over to a
@@ -76,14 +76,18 @@ type Row = {
   typed_at: number | null; taken: number; later_at: number | null; created_at: number; closed_why: string | null; undo: string | null;
 };
 
-/** A session has the answer: one said so (`ack`, which sets `delivered_at`),
- *  or the asker's transcript took a prompt after the answer was typed and the
- *  model was called after that. A prompt alone is not enough: a session can
- *  record the answer and be closed before any reply. Providers that do not
- *  report model calls (`lastTurnAt`) go by the prompt. */
-const TAKEN = `(delivered_at IS NOT NULL OR COALESCE((SELECT json_extract(facts, '$.lastPromptAt') >= cards.typed_at
-  AND COALESCE(json_extract(facts, '$.lastTurnAt'), json_extract(facts, '$.lastPromptAt')) >= cards.typed_at
-  FROM sessions WHERE sessions.id = cards.session_id), 0))`;
+/** The asker replied to the answer: its transcript took a prompt after the
+ *  answer was typed, and the model was called after that prompt. A prompt
+ *  alone is not enough: a session can record the answer and be closed before
+ *  any reply. Nor is a model call after the typing: an answer typed while a
+ *  turn runs waits behind it, and that turn's calls are not its reply.
+ *  Providers that do not report model calls (`lastTurnAt`) go by the prompt.
+ *  It holds only until the session's next prompt, so `settle` writes it down. */
+const REPLIED = `COALESCE((SELECT json_extract(facts, '$.lastPromptAt') >= cards.typed_at
+  AND COALESCE(json_extract(facts, '$.lastTurnAt') > json_extract(facts, '$.lastPromptAt'), 1)
+  FROM sessions WHERE sessions.id = cards.session_id), 0)`;
+/** A session has the answer (`delivered_at`): one said so (`ack`), or the asker replied to it. */
+const TAKEN = `(delivered_at IS NOT NULL OR ${REPLIED})`;
 const UNREAD = `state = 'answered' AND answer <> '' AND NOT ${TAKEN}`;
 const CARDS = `SELECT cards.*, ${TAKEN} AS taken FROM cards`;
 
@@ -184,7 +188,15 @@ export class Cards {
     for (const r of rows) this.deliverLater(r.id, Math.max(0, (r.answered_at ?? 0) + UNDO_MS - this.now()));
     this.fleet.on("yours", (id: string) => this.closeAsk(id, "you answered it in the conversation"));
     this.fleet.on("closed", (id: string) => this.dropAsk(id));
-    setInterval(() => void this.carryAsks().catch((e) => console.error("agentbox: asks:", e)), ASK_CHECK_MS).unref?.();
+    setInterval(() => {
+      this.settle();
+      void this.carryAsks().catch((e) => console.error("agentbox: asks:", e));
+    }, ASK_CHECK_MS).unref?.();
+  }
+
+  /** An answer its asker has replied to is delivered for good, whatever that session is told next. */
+  private settle(): void {
+    getDb().run(`UPDATE cards SET delivered_at = typed_at WHERE state = 'answered' AND typed_at IS NOT NULL AND delivered_at IS NULL AND ${REPLIED}`);
   }
 
   /** Close the card a session's ask became, if one is open. */
