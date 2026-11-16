@@ -62,7 +62,8 @@ export function AccountChip({
   accountId: string | null;
   accounts: readonly AccountView[];
   /** Idle past the claim window: no longer pinned. Shown as a hollow ring
-   *  and "any account", with where it last ran in the tooltip. */
+   *  and "any account", with where it last ran in the tooltip; a Claude
+   *  session keeps its account's name, since it wakes there while it can. */
   cold?: boolean;
   /** Extra text after the label, e.g. a usage summary. */
   detail?: string;
@@ -79,11 +80,15 @@ export function AccountChip({
       ? `Account ${accountId} (not found — forgotten?)`
       : "Not pinned to an account";
   if (cold && a) {
-    const coldTitle = `Unpinned: idle long enough that its prompt cache is cold, so it wakes on whichever ${a.provider} account has room. Last ran on ${a.label}.`;
+    // Claude's thinking is only readable in the organization it was written in.
+    const stays = a.provider === "claude";
+    const coldTitle = stays
+      ? `Idle long enough that its prompt cache is cold. It wakes on ${a.label}, or another account in its organization, while one has room, and so keeps its thinking; on any other only when none does.`
+      : `Unpinned: idle long enough that its prompt cache is cold, so it wakes on whichever ${a.provider} account has room. Last ran on ${a.label}.`;
     const coldInner = (
       <>
         <span className="acct-dot" aria-hidden="true" />
-        <span className="acct-label">any account</span>
+        <span className="acct-label">{stays ? a.label : "any account"}</span>
       </>
     );
     const coldCls = `acct acct-cold${plain ? " acct-plain" : ""}`;

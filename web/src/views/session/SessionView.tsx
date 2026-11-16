@@ -644,8 +644,8 @@ function Detail({
       <span className="fact">
         <AccountUsage accountId={session.accountId} accounts={state.accounts} cold={session.cold} />
       </span>
-      {/* A cold session wakes on whichever account has room, so the one it
-          last ran on is not the usage it will spend. */}
+      {/* A cold session wakes on an account with room, so the limit of the
+          one it last ran on is not in its way. */}
       {session.cold ? null : <AccountLimit accountId={session.accountId} accounts={state.accounts} />}
     </div>
   );

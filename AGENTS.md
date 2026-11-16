@@ -109,8 +109,10 @@ edits unstaged.
   the provider's prompt cache, so until its cache goes cold
   (`Session.cacheWarmUntil`, `src/core/cache.ts` — the one clock for "is it
   warm?"; nothing else should keep its own) resume and adopt use its pinned
-  account. After that it is shown unpinned, and a resume or a
-  message wakes it on the balancer's pick (`Fleet.wake`, which moves — never
+  account. After that a resume or a
+  message wakes it on the balancer's pick, for claude among the accounts of
+  the organization its thinking was written in while one of them can take it
+  (`Fleet.wake`, which moves — never
   copies — a transcript that lives in the account's home: claude and codex;
   omp, opencode and devin keep one store across accounts, and muse has no
   move at all).

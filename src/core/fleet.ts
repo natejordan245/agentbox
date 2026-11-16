@@ -3385,10 +3385,9 @@ export class Fleet extends EventEmitter {
   /**
    * The balancer's pick for moving a session, held to the organization its
    * account is in while an account there can take it: on another org's login
-   * it loses the thinking of every turn before (`orgOf`). Only an org of
-   * several logins (a team plan) holds it; one of a single login would pin
-   * the session where it is, and spreading personal plans' weeklies is worth
-   * more than its thinking. `leaving` is the login it cannot stay on.
+   * it loses the thinking of every turn before (`orgOf`). In an org of one
+   * login (a personal plan) that keeps it where it is. `leaving` is the login
+   * it cannot stay on.
    */
   private movePlacement(rec: SessionRecord, view: Session, leaving?: string): Placement {
     const p = this.placement(rec.provider, view.model, null, rec.effort ?? null, false, rec.scope);
@@ -3399,7 +3398,6 @@ export class Fleet extends EventEmitter {
       const a = getAccount(c.accountId);
       return a ? orgOf(a) === org : false;
     });
-    if (new Set(mates.map((c) => this.ownerOf(c.accountId))).size < 2) return p;
     const pick = mates.find((c) => c.eligible && c.accountId !== leaving);
     if (!pick) return p;
     return { ...p, candidates: mates, accountId: pick.accountId, mode: "auto", why: `${pick.label}, the balancer's first pick in the organization its thinking was written in` };
