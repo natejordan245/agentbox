@@ -8,7 +8,13 @@
  * cache has gone cold (`Session.cacheWarmUntil`, cache.ts) makes it read its
  * whole context again at full price to hear one line (parked is fine where the
  * cache outlives the process, `ProviderAdapter.parkIdleMs`). That is refused unless
- * the sender says waking it is the point (`wake`).
+ * the sender says waking it is the point (`wake`), or the session started the
+ * sender and is parked or cold, not stopped or closed: that is the report it
+ * started the sender for. On 11-15 7fah3u6y parked "waiting on a message from
+ * helper qjj23vb8"; the helper's "green and clean" was refused for waking it,
+ * the helper read that as "do not", and the lead sat twelve hours on work that
+ * was done. Of the 121 sender→reader pairs refused in the transcripts by then,
+ * 27 were a child writing to its own parent.
  *
  * Chatter: more than `CHATTER_MAX` messages from one session to another in
  * `CHATTER_WINDOW_MS`. Each one interrupts the reader and stays in its
@@ -41,14 +47,16 @@ function span(ms: number): string {
 /**
  * Why an agent's message to `s` would wake it, or null when it would not:
  * it runs and its cache is warm, or it is mid-turn (the message joins a turn
- * that is paying for the context anyway).
+ * that is paying for the context anyway), or it started the sender
+ * (`askedFor`) and is only parked or cold, not stopped or closed.
  */
-function wakeRefusal(s: Session, now: number): string | null {
+function wakeRefusal(s: Session, now: number, askedFor: boolean): string | null {
   const asleep = s.host === "none";
   // Parked, but its cache outlives the process: a resume reads it back warm.
   const warmResume = asleep && s.status === "waiting" && !!adapterFor(s.provider).parkIdleMs;
   const cold = s.cold || now > s.cacheWarmUntil;
   if ((!asleep || warmResume) && (!cold || s.status === "running" || s.status === "blocked")) return null;
+  if (askedFor && s.status !== "stopped" && s.status !== "closed") return null;
   const state = asleep
     ? s.status === "closed"
       ? "is closed"
@@ -112,6 +120,19 @@ function countSend(from: string | null, to: string, now: number): void {
   sent.set(pair(from, to), [...recent(pair(from, to), now), now]);
 }
 
+/** `from` was started by `to` (not grouped under it by hand): what it says
+ *  there is the report `to` started it for, so waking `to` is the point. A
+ *  sender from another machine is never a local session's child. */
+function startedBy(fleet: Pick<Fleet, "get">, from: string | null, to: string): boolean {
+  if (!from) return false;
+  try {
+    const s = fleet.get(from);
+    return s.parent === to && !s.parentByHand;
+  } catch {
+    return false;
+  }
+}
+
 /**
  * Where an agent's message to `id` goes (`to`: `id`, or whoever took over
  * from it) and why it may not, before anything is typed: the one check for
@@ -125,7 +146,7 @@ function agentRefusal(
 ): { meant: string; to: string; refusal: string | null } {
   const meant = fleet.get(id).id;
   const to = fleet.get(fleet.heir(meant));
-  const refusal = limitRefusal(to, now) ?? (opts.wake ? null : wakeRefusal(to, now)) ?? chatterRefusal(opts.from, to.id, now);
+  const refusal = limitRefusal(to, now) ?? (opts.wake ? null : wakeRefusal(to, now, startedBy(fleet, opts.from, meant))) ?? chatterRefusal(opts.from, to.id, now);
   return { meant, to: to.id, refusal: refusal && (to.id === meant ? refusal : `${meant} has been taken over by ${to.id}. ${refusal}`) };
 }
 
