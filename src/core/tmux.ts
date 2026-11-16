@@ -510,13 +510,13 @@ export function capture(name: string, opts: { ansi?: boolean; scrollback?: numbe
  * returns for each, null for a pane that is gone. One call per pass rather
  * than one per pane: a busy tmux server answers each call in ~50ms.
  */
-export function captureMany(names: string[]): Map<string, string | null> {
+export async function captureMany(names: string[]): Promise<Map<string, string | null>> {
   const out = new Map<string, string | null>();
   const marker = `\u001fab-capture-${crypto.randomUUID()}:`;
   let pending = names;
   while (pending.length) {
     const args = pending.flatMap((n) => ["display-message", "-p", `${marker}${n}`, ";", "capture-pane", "-p", "-J", "-t", `=${n}:`, ";"]);
-    const r = tmux(args.slice(0, -1));
+    const r = await tmuxAsync(args.slice(0, -1));
     let name: string | null = null;
     let lines: string[] = [];
     const flush = () => {
@@ -602,9 +602,4 @@ export function setRoomy(name: string, on: boolean, min = { cols: 80, rows: 24 }
 /** The argv that attaches a terminal to a session. */
 export function attachArgv(name: string): string[] {
   return ["tmux", "-L", tmuxSocket(), "attach-session", "-t", `=${name}`];
-}
-
-export function tmuxVersion(): string | null {
-  const p = Bun.spawnSync(["tmux", "-V"], { stdout: "pipe", stderr: "pipe" });
-  return p.exitCode === 0 ? p.stdout.toString().trim() : null;
 }

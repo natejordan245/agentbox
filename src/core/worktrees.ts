@@ -19,7 +19,7 @@ import {
 import { branchStatesOf, type PrState } from "./prs";
 import { worktreeRoot } from "./paths";
 import { setUpWorktree } from "./setup";
-import type { ReclaimResult, Session, WorktreeInfo, WorktreeScan, WorktreeVerdict } from "./types";
+import type { ReclaimResult, Repo, Session, WorktreeInfo, WorktreeScan, WorktreeVerdict } from "./types";
 
 /**
  * Disk reclaim for worktrees.
@@ -47,19 +47,22 @@ import type { ReclaimResult, Session, WorktreeInfo, WorktreeScan, WorktreeVerdic
  * worktree is. Throws, saying why, when there is nothing to cut it from: a
  * directory agentbox did not cut, or a detached checkout with no branch.
  */
-export function ensureCheckout(dir: string): void {
+export async function ensureCheckout(dir: string): Promise<void> {
   if (existsSync(dir)) return;
   const gone = `the directory is gone: ${dir}`;
   const name = isOurs(dir) ? relative(worktreeRoot(), dir).split("/")[0] : "";
   if (!name) throw new Error(gone);
   const branch = (getSessionRecord(name)?.facts as { gitBranch?: string | null } | null)?.gitBranch;
   if (!branch || branch === "HEAD") throw new Error(`${gone}, and it was on no branch it could be cut again from`);
-  const repos = listRepos().filter((r) => existsSync(repoCheckoutPath(r)) && refExists(repoCheckoutPath(r), `refs/heads/${branch}`));
+  const repos: Repo[] = [];
+  for (const r of listRepos()) {
+    if (existsSync(repoCheckoutPath(r)) && (await refExists(repoCheckoutPath(r), `refs/heads/${branch}`))) repos.push(r);
+  }
   if (repos.length !== 1) {
     throw new Error(`${gone}, and ${repos.length ? `${repos.length} registered repos have` : "no registered repo has"} its branch ${branch} to cut it again from`);
   }
   try {
-    const { path } = createWorktree(repos[0]!, name, branch, branch);
+    const { path } = await createWorktree(repos[0]!, name, branch, branch);
     setUpWorktree(repos[0]!, path, name);
   } catch (e) {
     throw new Error(`${gone}, and cutting it again from ${branch} failed: ${(e as Error).message}`);
@@ -303,7 +306,7 @@ export async function scanWorktrees(
 
   const repos = listRepos().filter((r) => existsSync(repoCheckoutPath(r)));
   const perRepo = await mapPool(repos, concurrency, async (repo) => {
-    const worktrees = listWorktreesOf(repoCheckoutPath(repo));
+    const worktrees = await listWorktreesOf(repoCheckoutPath(repo));
     // Only when it has a linked worktree to ask about.
     const asked = repo.fullName !== null && worktrees.some((w) => !w.isMain && w.branch);
     const prs = asked ? branchStatesOf(repo.fullName!) : null;
@@ -477,7 +480,7 @@ export async function reclaimWorktrees(
     }
 
     const bytes = item.bytes;
-    const r = removeWorktreeAt(repoPath, item.path);
+    const r = await removeWorktreeAt(repoPath, item.path);
     if (existsSync(item.path)) {
       result.failed.push({
         path: item.path,

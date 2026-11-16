@@ -24,7 +24,7 @@
 import { existsSync, realpathSync, statSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { basename, dirname, resolve, sep } from "node:path";
-import { currentBranch, run } from "../core/git";
+import { currentBranch, runSync } from "../core/git";
 
 export interface Place {
   /** Absolute path the agent runs in. */
@@ -49,7 +49,7 @@ const toplevels = new Map<string, string | null>();
 function toplevelOf(path: string): string | null {
   const hit = toplevels.get(path);
   if (hit !== undefined) return hit;
-  const r = run(["git", "rev-parse", "--show-toplevel"], path);
+  const r = runSync(["git", "rev-parse", "--show-toplevel"], path);
   const top = r.code === 0 && r.stdout.trim() ? r.stdout.trim() : null;
   toplevels.set(path, top);
   return top;
@@ -69,7 +69,7 @@ export function describePlace(path: string, opts: { dirty?: boolean } = {}): Pla
   const branch = currentBranch(path) || null;
   let dirty: boolean | null = null;
   if (opts.dirty) {
-    const r = run(["git", "status", "--porcelain", "--untracked-files=no"], path);
+    const r = runSync(["git", "status", "--porcelain", "--untracked-files=no"], path);
     dirty = r.code === 0 ? r.stdout.trim().length > 0 : null;
   }
   return { path, toplevel, branch, dirty };

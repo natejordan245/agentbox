@@ -1,5 +1,6 @@
 import { basename, dirname, join, resolve } from "node:path";
-import { existsSync, mkdirSync, readdirSync, readFileSync, realpathSync, rmSync, statSync } from "node:fs";
+import { existsSync, mkdirSync, readdirSync, readFileSync, realpathSync, statSync } from "node:fs";
+import { rm } from "node:fs/promises";
 import { repoRoot, worktreeRoot } from "./paths";
 import type { Repo } from "./types";
 
@@ -10,15 +11,13 @@ export interface CmdResult {
 }
 
 /**
- * Run a command synchronously and capture output.
- *
- * `GIT_TERMINAL_PROMPT=0` is load-bearing: several of the calls below reach a
- * remote (`ls-remote`, `fetch`, `clone`), and against a private repo with no
- * usable credentials git would otherwise block forever on a username prompt
- * that nobody is there to answer — a server process with no terminal. With it,
- * git fails immediately and the caller gets a message it can show.
+ * `run`, holding the thread until the command ends: only for a question a
+ * local git answers in a few milliseconds and that a synchronous caller asks
+ * once and keeps (`repoFullNameOf`). Never for the network, and never for a
+ * command whose time grows with the repository: on the server every page,
+ * terminal and CLI call waits behind it.
  */
-export function run(cmd: string[], cwd?: string, env?: Record<string, string>): CmdResult {
+export function runSync(cmd: string[], cwd?: string, env?: Record<string, string>): CmdResult {
   try {
     const res = Bun.spawnSync(cmd, {
       cwd,
@@ -32,11 +31,7 @@ export function run(cmd: string[], cwd?: string, env?: Record<string, string>): 
       stderr: res.stderr.toString(),
     };
   } catch (err) {
-    // Bun.spawnSync THROWS on a missing binary rather than returning a non-zero
-    // exit — so without this, an absent `gh` propagates an exception out of the
-    // cold refresh instead of becoming the warning the UI is supposed to show.
-    // 127 is the shell's own "command not found", which every caller here
-    // already treats as a failed command.
+    // A missing binary throws rather than exiting non-zero (see `run`).
     return { code: MISSING_BINARY, stdout: "", stderr: `${cmd[0]}: ${(err as Error).message}` };
   }
 }
@@ -45,15 +40,17 @@ export function run(cmd: string[], cwd?: string, env?: Record<string, string>): 
 const MISSING_BINARY = 127;
 
 /**
- * `run`, without blocking the event loop, so callers can have several in
- * flight.
+ * Run a command and capture its output, without holding the thread: a fetch,
+ * a `worktree add` or a diff of a large repository takes seconds, and callers
+ * can have several in flight.
  *
- * Everything else in this file is `spawnSync`, which is right for the one-shot
- * questions the rest of agentbox asks. The worktree scan is the exception: it
- * asks the same question of a hundred and fifty directories, and those are
- * independent I/O-bound subprocesses. Run serially they took 45 seconds.
+ * `GIT_TERMINAL_PROMPT=0` is load-bearing: several of the calls below reach a
+ * remote (`ls-remote`, `fetch`, `clone`), and against a private repo with no
+ * usable credentials git would otherwise block forever on a username prompt
+ * that nobody is there to answer — a server process with no terminal. With it,
+ * git fails immediately and the caller gets a message it can show.
  */
-export async function runAsync(
+export async function run(
   cmd: string[],
   cwd?: string,
   env?: Record<string, string>,
@@ -72,7 +69,11 @@ export async function runAsync(
     ]);
     return { code, stdout, stderr };
   } catch (err) {
-    // Same reason as `run`: a missing binary throws rather than exiting non-zero.
+    // Bun.spawn THROWS on a missing binary rather than returning a non-zero
+    // exit — so without this, an absent `gh` propagates an exception out of the
+    // cold refresh instead of becoming the warning the UI is supposed to show.
+    // 127 is the shell's own "command not found", which every caller here
+    // already treats as a failed command.
     return { code: MISSING_BINARY, stdout: "", stderr: `${cmd[0]}: ${(err as Error).message}` };
   }
 }
@@ -129,7 +130,7 @@ export function repoCheckoutPath(repo: Repo): string {
  * Local repos are used in place; GitHub slugs are cloned under repoRoot.
  * Returns the canonical local repo path.
  */
-function ensureRepoClone(repo: Repo): { path: string; fullName: string | null } {
+async function ensureRepoClone(repo: Repo): Promise<{ path: string; fullName: string | null }> {
   if (repo.kind === "local") {
     // A local checkout can still have a GitHub origin, which is what makes its
     // PRs findable. The slug is resolved at registration; re-resolve only if
@@ -139,7 +140,7 @@ function ensureRepoClone(repo: Repo): { path: string; fullName: string | null } 
   const dest = repoCheckoutPath(repo);
   if (!existsSync(join(dest, ".git"))) {
     mkdirSync(repoRoot(), { recursive: true });
-    const r = run(["git", "clone", "--", `https://github.com/${repo.ref}.git`, dest]);
+    const r = await run(["git", "clone", "--", `https://github.com/${repo.ref}.git`, dest]);
     if (r.code !== 0) throw new Error(`clone failed: ${firstLine(r.stderr)}`);
   }
   return { path: dest, fullName: repo.fullName ?? repo.ref };
@@ -147,8 +148,8 @@ function ensureRepoClone(repo: Repo): { path: string; fullName: string | null } 
 
 // ------------------------------------------------------------- branches
 
-export function refExists(repoPath: string, ref: string): boolean {
-  return run(["git", "show-ref", "--verify", "--quiet", ref], repoPath).code === 0;
+export async function refExists(repoPath: string, ref: string): Promise<boolean> {
+  return (await run(["git", "show-ref", "--verify", "--quiet", ref], repoPath)).code === 0;
 }
 
 /**
@@ -161,23 +162,23 @@ export function refExists(repoPath: string, ref: string): boolean {
  * us, and finally to the branch that is checked out right now (which is the
  * right answer for a local repo with no remote at all).
  */
-export function resolveDefaultBranch(repoPath: string): string {
-  const symbolic = run(["git", "symbolic-ref", "--short", "refs/remotes/origin/HEAD"], repoPath);
+export async function resolveDefaultBranch(repoPath: string): Promise<string> {
+  const symbolic = await run(["git", "symbolic-ref", "--short", "refs/remotes/origin/HEAD"], repoPath);
   if (symbolic.code === 0) {
     const name = symbolic.stdout.trim().replace(/^origin\//, "");
     if (name) return name;
   }
   // origin exists but HEAD was never recorded locally (a --depth or -b clone).
   // Ask the remote once; this is registration-time, so a network call is fine.
-  if (run(["git", "remote", "get-url", "origin"], repoPath).code === 0) {
-    const remote = run(["git", "ls-remote", "--symref", "origin", "HEAD"], repoPath);
+  if ((await run(["git", "remote", "get-url", "origin"], repoPath)).code === 0) {
+    const remote = await run(["git", "ls-remote", "--symref", "origin", "HEAD"], repoPath);
     const m = remote.stdout.match(/^ref:\s+refs\/heads\/(\S+)\s+HEAD$/m);
     if (m) return m[1];
   }
   for (const candidate of ["main", "master"]) {
-    if (refExists(repoPath, `refs/heads/${candidate}`)) return candidate;
+    if (await refExists(repoPath, `refs/heads/${candidate}`)) return candidate;
   }
-  const head = run(["git", "branch", "--show-current"], repoPath).stdout.trim();
+  const head = (await run(["git", "branch", "--show-current"], repoPath)).stdout.trim();
   if (head) return head;
   // A repo with no commits has no branch to report; `main` is git's own default.
   return "main";
@@ -188,23 +189,37 @@ export function resolveDefaultBranch(repoPath: string): string {
  * default branch over a possibly stale local copy. Returns null when neither
  * exists, in which case the caller cuts from HEAD.
  */
-function startPointFor(repoPath: string, defaultBranch: string): string | null {
+async function startPointFor(repoPath: string, defaultBranch: string): Promise<string | null> {
   const remoteRef = `refs/remotes/origin/${defaultBranch}`;
-  if (refExists(repoPath, remoteRef)) {
+  if (await refExists(repoPath, remoteRef)) {
     // Best-effort refresh so the worktree is not cut from a week-old fetch.
     // Offline is a normal state here, so a failure just means we use what we have.
-    run(["git", "fetch", "--quiet", "origin", defaultBranch], repoPath);
+    await run(["git", "fetch", "--quiet", "origin", defaultBranch], repoPath);
     return `origin/${defaultBranch}`;
   }
-  if (refExists(repoPath, `refs/heads/${defaultBranch}`)) return defaultBranch;
+  if (await refExists(repoPath, `refs/heads/${defaultBranch}`)) return defaultBranch;
   return null;
 }
 
 // ------------------------------------------------------------ worktrees
 
+/**
+ * Run `fn` once whatever is already cutting a checkout from `repo` is done.
+ * A cut fetches and then reads `FETCH_HEAD`, which a second fetch in between
+ * has rewritten to another branch's commit; two clones of one repo would
+ * write the same directory.
+ */
+function oneAtATime<T>(repo: Repo, fn: () => Promise<T>): Promise<T> {
+  const key = repoCheckoutPath(repo);
+  const next = (cutting.get(key) ?? Promise.resolve()).then(fn);
+  cutting.set(key, next.catch(() => {}));
+  return next;
+}
+const cutting = new Map<string, Promise<unknown>>();
+
 /** Worktree paths git currently has registered for this repo. */
-function registeredWorktrees(repoPath: string): Set<string> {
-  const r = run(["git", "worktree", "list", "--porcelain"], repoPath);
+async function registeredWorktrees(repoPath: string): Promise<Set<string>> {
+  const r = await run(["git", "worktree", "list", "--porcelain"], repoPath);
   const out = new Set<string>();
   if (r.code !== 0) return out;
   for (const line of r.stdout.split("\n")) {
@@ -229,17 +244,21 @@ export function createWorktree(
   /** The PR `fromBranch` is the head of: fetched as `pull/N/head` when the
    *  branch itself is not on origin (a PR from a fork). */
   pr?: number
-): { path: string; fullName: string | null } {
-  const { path: repoPath, fullName } = ensureRepoClone(repo);
+): Promise<{ path: string; fullName: string | null }> {
+  return oneAtATime(repo, () => cut(repo, id, branch, fromBranch, pr));
+}
+
+async function cut(repo: Repo, id: string, branch: string, fromBranch?: string, pr?: number): Promise<{ path: string; fullName: string | null }> {
+  const { path: repoPath, fullName } = await ensureRepoClone(repo);
   mkdirSync(worktreeRoot(), { recursive: true });
   const abs = join(worktreeRoot(), id);
 
   // Clear registrations whose directory a previous run deleted; without this,
   // git refuses the path as "already registered" for a worktree that is gone.
-  run(["git", "worktree", "prune"], repoPath);
+  await run(["git", "worktree", "prune"], repoPath);
 
   if (existsSync(abs)) {
-    if (registeredWorktrees(repoPath).has(abs) && isGitRepo(abs)) {
+    if ((await registeredWorktrees(repoPath)).has(abs) && isGitRepo(abs)) {
       // A retried spawn for the same session id: the worktree we would have
       // created already exists and belongs to this repo. Reuse it.
       return { path: abs, fullName };
@@ -251,31 +270,20 @@ export function createWorktree(
   }
 
   const target = fromBranch ?? branch;
-  const targetExists = refExists(repoPath, `refs/heads/${target}`);
+  const targetExists = await refExists(repoPath, `refs/heads/${target}`);
 
   if (fromBranch && !targetExists) {
     // Branch we were asked to continue only exists on the remote (or is a PR ref).
-    const fetched = run(["git", "fetch", "origin", `${fromBranch}:refs/heads/${fromBranch}`], repoPath);
+    const fetched = await run(["git", "fetch", "origin", `${fromBranch}:refs/heads/${fromBranch}`], repoPath);
     if (fetched.code !== 0) {
-      const pull = run(["git", "fetch", "origin", `pull/${pr ?? fromBranch}/head:refs/heads/${fromBranch}`], repoPath);
+      const pull = await run(["git", "fetch", "origin", `pull/${pr ?? fromBranch}/head:refs/heads/${fromBranch}`], repoPath);
       if (pull.code !== 0) {
         throw new Error(`branch "${fromBranch}" is not in this repo or on its remote`);
       }
     }
   }
 
-  const checkedOutElsewhere = (): string | null => {
-    const r = run(["git", "worktree", "list", "--porcelain"], repoPath);
-    if (r.code !== 0) return null;
-    let path: string | null = null;
-    for (const line of r.stdout.split("\n")) {
-      if (line.startsWith("worktree ")) path = line.slice("worktree ".length).trim();
-      if (line.trim() === `branch refs/heads/${target}`) return path;
-    }
-    return null;
-  };
-
-  const existing = checkedOutElsewhere();
+  const existing = (await listWorktreesOf(repoPath)).find((w) => w.branch === target)?.path;
   if (existing && existing !== abs) {
     throw new Error(`branch "${target}" is already checked out at ${existing}`);
   }
@@ -286,13 +294,13 @@ export function createWorktree(
     // that would silently reset the branch someone else's work is on.
     cmd = ["git", "worktree", "add", abs, target];
   } else {
-    const start = startPointFor(repoPath, repo.defaultBranch);
+    const start = await startPointFor(repoPath, repo.defaultBranch);
     cmd = start
       ? ["git", "worktree", "add", "-b", branch, abs, start]
       : ["git", "worktree", "add", "-b", branch, abs];
   }
 
-  const r = run(cmd, repoPath);
+  const r = await run(cmd, repoPath);
   if (r.code !== 0) throw new Error(`worktree add failed: ${firstLine(r.stderr) || `exit ${r.code}`}`);
   return { path: abs, fullName };
 }
@@ -310,22 +318,27 @@ export function createWorktree(
  * A local copy with commits of its own is someone's work and stays as it is;
  * offline, or for a branch origin does not have, the local copy is used.
  */
-export function worktreeForBranch(repo: Repo, id: string, branch: string, pr?: number): { path: string; created: boolean } {
-  const { path: repoPath } = ensureRepoClone(repo);
-  run(["git", "worktree", "prune"], repoPath);
-  const existing = listWorktreesOf(repoPath).find((w) => w.branch === branch && existsSync(w.path));
-  const fetched = run(["git", "fetch", "--quiet", "origin", branch], repoPath).code === 0
-    || (pr !== undefined && run(["git", "fetch", "--quiet", "origin", `pull/${pr}/head`], repoPath).code === 0);
-  const theirs = fetched ? run(["git", "rev-parse", "--verify", "--quiet", "FETCH_HEAD^{commit}"], repoPath).stdout.trim() : "";
-  const ours = run(["git", "rev-parse", "--verify", "--quiet", `refs/heads/${branch}^{commit}`], repoPath).stdout.trim();
-  const behind = !!theirs && !!ours && ours !== theirs && run(["git", "merge-base", "--is-ancestor", ours, theirs], repoPath).code === 0;
-  if (theirs && !ours) run(["git", "branch", branch, theirs], repoPath);
-  else if (behind && !existing) run(["git", "update-ref", `refs/heads/${branch}`, theirs, ours], repoPath);
-  else if (behind && !run(["git", "status", "--porcelain", "--untracked-files=no"], existing!.path).stdout.trim()) {
-    run(["git", "merge", "--ff-only", "--quiet", theirs], existing!.path);
+export function worktreeForBranch(repo: Repo, id: string, branch: string, pr?: number): Promise<{ path: string; created: boolean }> {
+  return oneAtATime(repo, () => branchCheckout(repo, id, branch, pr));
+}
+
+async function branchCheckout(repo: Repo, id: string, branch: string, pr?: number): Promise<{ path: string; created: boolean }> {
+  const { path: repoPath } = await ensureRepoClone(repo);
+  const git = (args: string[], cwd = repoPath) => run(["git", ...args], cwd);
+  await git(["worktree", "prune"]);
+  const existing = (await listWorktreesOf(repoPath)).find((w) => w.branch === branch && existsSync(w.path));
+  const fetched = (await git(["fetch", "--quiet", "origin", branch])).code === 0
+    || (pr !== undefined && (await git(["fetch", "--quiet", "origin", `pull/${pr}/head`])).code === 0);
+  const theirs = fetched ? (await git(["rev-parse", "--verify", "--quiet", "FETCH_HEAD^{commit}"])).stdout.trim() : "";
+  const ours = (await git(["rev-parse", "--verify", "--quiet", `refs/heads/${branch}^{commit}`])).stdout.trim();
+  const behind = !!theirs && !!ours && ours !== theirs && (await git(["merge-base", "--is-ancestor", ours, theirs])).code === 0;
+  if (theirs && !ours) await git(["branch", branch, theirs]);
+  else if (behind && !existing) await git(["update-ref", `refs/heads/${branch}`, theirs, ours]);
+  else if (behind && !(await git(["status", "--porcelain", "--untracked-files=no"], existing!.path)).stdout.trim()) {
+    await git(["merge", "--ff-only", "--quiet", theirs], existing!.path);
   }
   if (existing) return { path: existing.path, created: false };
-  return { path: createWorktree(repo, id, branch, branch, pr).path, created: true };
+  return { path: (await cut(repo, id, branch, branch, pr)).path, created: true };
 }
 
 /**
@@ -335,18 +348,22 @@ export function worktreeForBranch(repo: Repo, id: string, branch: string, pr?: n
  * how stale this machine's clone is; offline, a ref the clone already has is
  * used as it is. `sha` is the commit it was cut at.
  */
-export function detachedWorktree(repo: Repo, id: string, ref: string): { path: string; sha: string } {
+export async function detachedWorktree(repo: Repo, id: string, ref: string): Promise<{ path: string; sha: string }> {
   if (!/^[\w./-]{1,200}$/.test(ref) || ref.startsWith("-") || ref.includes("..")) throw new Error(`not a ref: ${ref}`);
-  const { path: repoPath } = ensureRepoClone(repo);
+  return oneAtATime(repo, () => cutDetached(repo, id, ref));
+}
+
+async function cutDetached(repo: Repo, id: string, ref: string): Promise<{ path: string; sha: string }> {
+  const { path: repoPath } = await ensureRepoClone(repo);
   mkdirSync(worktreeRoot(), { recursive: true });
   const abs = join(worktreeRoot(), id);
-  run(["git", "worktree", "prune"], repoPath);
+  await run(["git", "worktree", "prune"], repoPath);
   if (existsSync(abs) && readdirSync(abs).length > 0) throw new Error(`worktree path is already occupied: ${abs}`);
-  const fetched = run(["git", "fetch", "--quiet", "origin", ref], repoPath);
-  let sha = fetched.code === 0 ? run(["git", "rev-parse", "--verify", "--quiet", "FETCH_HEAD^{commit}"], repoPath).stdout.trim() : "";
-  if (!sha) sha = run(["git", "rev-parse", "--verify", "--quiet", `${ref}^{commit}`], repoPath).stdout.trim();
+  const fetched = await run(["git", "fetch", "--quiet", "origin", ref], repoPath);
+  let sha = fetched.code === 0 ? (await run(["git", "rev-parse", "--verify", "--quiet", "FETCH_HEAD^{commit}"], repoPath)).stdout.trim() : "";
+  if (!sha) sha = (await run(["git", "rev-parse", "--verify", "--quiet", `${ref}^{commit}`], repoPath)).stdout.trim();
   if (!sha) throw new Error(`"${ref}" is not on origin or in this repo${fetched.code !== 0 ? ` (fetch: ${firstLine(fetched.stderr) || `exit ${fetched.code}`})` : ""}`);
-  const r = run(["git", "worktree", "add", "--detach", abs, sha], repoPath);
+  const r = await run(["git", "worktree", "add", "--detach", abs, sha], repoPath);
   if (r.code !== 0) throw new Error(`worktree add failed: ${firstLine(r.stderr) || `exit ${r.code}`}`);
   return { path: abs, sha };
 }
@@ -359,16 +376,16 @@ export function detachedWorktree(repo: Repo, id: string, ref: string): { path: s
  * else is left for the reclaim (src/core/worktrees.ts) to judge. Says
  * whether it went.
  */
-export function removeDetachedWorktree(worktreePath: string): boolean {
+export async function removeDetachedWorktree(worktreePath: string): Promise<boolean> {
   if (!existsSync(worktreePath) || !isGitRepo(worktreePath)) return false;
-  if (run(["git", "symbolic-ref", "--quiet", "HEAD"], worktreePath).code === 0) return false;
-  const status = run(["git", "status", "--porcelain"], worktreePath);
+  if ((await run(["git", "symbolic-ref", "--quiet", "HEAD"], worktreePath)).code === 0) return false;
+  const status = await run(["git", "status", "--porcelain"], worktreePath);
   if (status.code !== 0 || status.stdout.trim()) return false;
-  const moves = run(["git", "reflog", "show", "--format=%H", "HEAD"], worktreePath);
+  const moves = await run(["git", "reflog", "show", "--format=%H", "HEAD"], worktreePath);
   if (moves.code !== 0 || moves.stdout.trim().split("\n").length !== 1) return false;
-  const common = run(["git", "rev-parse", "--path-format=absolute", "--git-common-dir"], worktreePath).stdout.trim();
+  const common = (await run(["git", "rev-parse", "--path-format=absolute", "--git-common-dir"], worktreePath)).stdout.trim();
   if (!common) return false;
-  removeWorktreeAt(dirname(common), worktreePath);
+  await removeWorktreeAt(dirname(common), worktreePath);
   return !existsSync(worktreePath);
 }
 
@@ -380,14 +397,14 @@ export function removeDetachedWorktree(worktreePath: string): boolean {
  * so removing the directory costs nothing but disk, while `git branch -D`
  * alongside it would turn "reclaimed" into "unresumable".
  */
-export function removeWorktreeAt(repoPath: string, worktreePath: string): CmdResult {
-  const r = run(["git", "worktree", "remove", "--force", worktreePath], repoPath);
+export async function removeWorktreeAt(repoPath: string, worktreePath: string): Promise<CmdResult> {
+  const r = await run(["git", "worktree", "remove", "--force", worktreePath], repoPath);
   // `worktree remove` refuses a path git has already forgotten (a directory
   // left behind by an interrupted removal, say). Prune and take the directory
   // itself, or the entry is undeletable through this path forever.
   if (r.code !== 0 && existsSync(worktreePath)) {
-    run(["git", "worktree", "prune"], repoPath);
-    rmSync(worktreePath, { recursive: true, force: true });
+    await run(["git", "worktree", "prune"], repoPath);
+    await rm(worktreePath, { recursive: true, force: true });
   }
   return r;
 }
@@ -399,10 +416,10 @@ export function removeWorktreeAt(repoPath: string, worktreePath: string): CmdRes
  */
 export async function removeWorktreeIdly(repoPath: string, worktreePath: string): Promise<CmdResult> {
   const idle = ["nice", "-n", "19", "ionice", "-c", "3"];
-  const r = await runAsync([...idle, "git", "worktree", "remove", "--force", worktreePath], repoPath);
+  const r = await run([...idle, "git", "worktree", "remove", "--force", worktreePath], repoPath);
   if (r.code !== 0 && existsSync(worktreePath)) {
-    await runAsync(["git", "worktree", "prune"], repoPath);
-    await runAsync([...idle, "rm", "-rf", "--", worktreePath]);
+    await run(["git", "worktree", "prune"], repoPath);
+    await run([...idle, "rm", "-rf", "--", worktreePath]);
   }
   return r;
 }
@@ -412,11 +429,11 @@ export async function removeWorktreeIdly(repoPath: string, worktreePath: string)
  *  file's mtime: a `git status` rewrites the index and a `git gc` rewrites
  *  every worktree's reflog, and neither is somebody working here. */
 export async function headMovedAt(worktreePath: string): Promise<number | null> {
-  const r = await runAsync(["git", "log", "-g", "-1", "--format=%gd", "--date=unix", "HEAD"], worktreePath);
+  const r = await run(["git", "log", "-g", "-1", "--format=%gd", "--date=unix", "HEAD"], worktreePath);
   const at = Number(/@\{(\d+)\}/.exec(r.stdout)?.[1]);
   if (r.code === 0 && Number.isFinite(at) && at > 0) return at * 1000;
   // No reflog (a fresh `worktree add --detach` has one; a pruned one may not).
-  const dir = await runAsync(["git", "rev-parse", "--absolute-git-dir"], worktreePath);
+  const dir = await run(["git", "rev-parse", "--absolute-git-dir"], worktreePath);
   if (dir.code !== 0) return null;
   try {
     return statSync(join(dir.stdout.trim(), "HEAD")).mtimeMs;
@@ -444,8 +461,8 @@ export interface WorktreeEntry {
  * dropped: callers need to *show* it (it is usually the biggest directory on
  * disk) while never offering to delete it.
  */
-export function listWorktreesOf(repoPath: string): WorktreeEntry[] {
-  const r = run(["git", "worktree", "list", "--porcelain"], repoPath);
+export async function listWorktreesOf(repoPath: string): Promise<WorktreeEntry[]> {
+  const r = await run(["git", "worktree", "list", "--porcelain"], repoPath);
   if (r.code !== 0) return [];
 
   const out: WorktreeEntry[] = [];
@@ -567,7 +584,7 @@ function mainRootOf(dir: string): string | null {
 
 /** The branch a checkout is on, or null when detached or unreadable. */
 export async function branchAt(worktreePath: string): Promise<string | null> {
-  const r = await runAsync(["git", "rev-parse", "--abbrev-ref", "HEAD"], worktreePath);
+  const r = await run(["git", "rev-parse", "--abbrev-ref", "HEAD"], worktreePath);
   const name = r.stdout.trim();
   return r.code === 0 && name && name !== "HEAD" ? name : null;
 }
@@ -582,7 +599,7 @@ export interface Dirt {
 }
 
 export async function dirtOf(worktreePath: string): Promise<Dirt> {
-  const r = await runAsync(["git", "status", "--porcelain", "-z"], worktreePath);
+  const r = await run(["git", "status", "--porcelain", "-z"], worktreePath);
   // A worktree we cannot read is treated as edited: the reclaim must never
   // take "the command failed" for "there is nothing here".
   if (r.code !== 0) return { level: "major", newestAt: null };
@@ -615,7 +632,7 @@ export async function dirtOf(worktreePath: string): Promise<Dirt> {
  *  worktree, or one whose repo is gone, would leave unreachable. -1 where git
  *  cannot say, which callers must not read as "nothing is held here". */
 export async function commitsHeldOnlyHere(worktreePath: string): Promise<number> {
-  const r = await runAsync(["git", "rev-list", "--count", "HEAD", "--not", "--branches", "--remotes"], worktreePath);
+  const r = await run(["git", "rev-list", "--count", "HEAD", "--not", "--branches", "--remotes"], worktreePath);
   const n = Number(r.stdout.trim());
   return r.code === 0 && Number.isInteger(n) ? n : -1;
 }
@@ -632,7 +649,7 @@ export async function commitsHeldOnlyHere(worktreePath: string): Promise<number>
  * An unreadable directory reports 0 rather than failing the scan.
  */
 export async function diskBytesOf(path: string): Promise<number> {
-  const r = await runAsync(["du", "-sk", path]);
+  const r = await run(["du", "-sk", path]);
   const kb = Number(r.stdout.split(/\s+/)[0]);
   return Number.isFinite(kb) ? kb * 1024 : 0;
 }
@@ -675,7 +692,7 @@ function parseRemote(url: string): Remote | null {
  * no slug — so callers must not read it as "lookup failed".
  */
 export function repoFullNameOf(path: string): string | null {
-  const r = run(["git", "remote", "get-url", "origin"], path);
+  const r = runSync(["git", "remote", "get-url", "origin"], path);
   if (r.code !== 0) return null;
   return slugFromRemoteUrl(r.stdout.trim());
 }
@@ -695,6 +712,6 @@ function slugFromRemoteUrl(url: string): string | null {
 }
 
 export function currentBranch(path: string): string {
-  const r = run(["git", "branch", "--show-current"], path);
+  const r = runSync(["git", "branch", "--show-current"], path);
   return r.stdout.trim();
 }

@@ -73,7 +73,7 @@ test("a session the fleet starts carries no prompt on its command line", async (
     sendText: async () => {},
     sendKeys: () => {},
     capture: () => null,
-    captureMany: () => new Map(),
+    captureMany: async () => new Map(),
   };
   insertAccount({ ...account, id: "fixture-account", provider: "claude", home: join(dir, "account"), isDefault: false });
   const fleet = new Fleet({ adapters: [claudeAdapter], runtime, usage: { usageOf: () => null } });

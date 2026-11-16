@@ -213,7 +213,7 @@ export interface Runtime {
   submitDraft?(name: string, text: string): Promise<boolean>;
   sendKeys(name: string, keys: string[]): void;
   capture(name: string, opts?: { ansi?: boolean; scrollback?: number }): string | null;
-  captureMany(names: string[]): Map<string, string | null>;
+  captureMany(names: string[]): Promise<Map<string, string | null>>;
   killSession(name: string): void;
   setZoom?(name: string, on: boolean): boolean;
   /** A window too small to read a dialog off grown for a while, or handed back; whether it grew. */
@@ -577,7 +577,7 @@ export class Fleet extends EventEmitter {
     this.passes++;
     this.panes = new Map((await this.deps.runtime.listPanes()).map((p) => [p.name, p]));
     for (const name of this.screens.keys()) if (!this.panes.has(name)) this.screens.delete(name);
-    this.prefetchScreens();
+    await this.prefetchScreens();
     this.coldAfterMs = settings.balancer.claimIdleMin * 60_000;
     this.owner = owners(accounts);
     // Movable means there is another *account* to move to; a second home on
@@ -2588,11 +2588,11 @@ export class Fleet extends EventEmitter {
   /** Captures every live pane whose screen may have moved in one tmux call: a
    *  busy tmux server takes ~50ms to answer each call, and a spinner moves its
    *  pane every second. */
-  private prefetchScreens(): void {
+  private async prefetchScreens(): Promise<void> {
     const stale = [...this.panes.values()].filter((p) => !p.dead && !this.screenIsCurrent(p));
     if (!stale.length) return;
     const at = Date.now();
-    const screens = this.deps.runtime.captureMany(stale.map((p) => p.name));
+    const screens = await this.deps.runtime.captureMany(stale.map((p) => p.name));
     for (const pane of stale) this.keepScreen(pane, screens.get(pane.name) ?? null, at);
   }
 
@@ -3118,17 +3118,17 @@ export class Fleet extends EventEmitter {
       if (!repo) throw new FleetError(404, `no repo ${req.repoId}`);
       if (req.ref) {
         try {
-          cwd = detachedWorktree(repo, id, req.ref).path;
+          cwd = (await detachedWorktree(repo, id, req.ref)).path;
         } catch (e) {
           throw new FleetError(400, (e as Error).message);
         }
         worktree = cwd;
       } else if (req.branch) {
-        const wt = worktreeForBranch(repo, id, req.branch, req.pr);
+        const wt = await worktreeForBranch(repo, id, req.branch, req.pr);
         cwd = wt.path;
         worktree = wt.created ? wt.path : null;
       } else if (req.worktree) {
-        const wt = createWorktree(repo, id, `ab/${id}`);
+        const wt = await createWorktree(repo, id, `ab/${id}`);
         cwd = wt.path;
         worktree = wt.path;
       } else if (repo.kind === "local") {
@@ -3143,7 +3143,7 @@ export class Fleet extends EventEmitter {
     }
     if (!cwd) throw new FleetError(400, "say where the session should run: a repo or a directory");
     try {
-      ensureCheckout(cwd);
+      await ensureCheckout(cwd);
     } catch (e) {
       throw new FleetError(400, (e as Error).message);
     }
@@ -3240,10 +3240,10 @@ export class Fleet extends EventEmitter {
   }
 
   /** `resumeCwd`, cut again from its branch if the reclaim took it. */
-  private resumeDir(rec: SessionRecord): string {
+  private async resumeDir(rec: SessionRecord): Promise<string> {
     const cwd = this.resumeCwd(rec);
     try {
-      ensureCheckout(cwd);
+      await ensureCheckout(cwd);
     } catch (e) {
       throw new FleetError(409, `cannot resume: ${(e as Error).message}`);
     }
@@ -3299,7 +3299,7 @@ export class Fleet extends EventEmitter {
     if (!rec.agentSessionId) throw new FleetError(409, "this session never started a conversation, so there is nothing to resume");
     const account = this.accountFor(rec, view);
     if (!account) throw new FleetError(409, "this session's account is no longer set up; add it back to resume on the same account");
-    const cwd = this.resumeDir(rec);
+    const cwd = await this.resumeDir(rec);
     attempt?.();
     if (view.cold) {
       await this.wake(rec, view, account, cwd, this.wakeTarget(rec, view), prompt);
@@ -3508,7 +3508,7 @@ export class Fleet extends EventEmitter {
       if (opts.prompt) await this.typeInto(rec.id, rec.provider, view.tmux, opts.prompt);
       return view;
     }
-    const cwd = this.resumeDir(rec);
+    const cwd = await this.resumeDir(rec);
     await this.wake(rec, view, from, cwd, target, opts.prompt);
     await this.tick();
     return this.get(id);
@@ -3568,7 +3568,7 @@ export class Fleet extends EventEmitter {
       // until its first transcript is written, so there is nothing to resume it on.
       if (!rec.agentSessionId) throw new FleetError(409, "this session never started a conversation");
       if (!account) throw new FleetError(409, "this session's account is no longer set up");
-      const cwd = this.resumeDir(rec);
+      const cwd = await this.resumeDir(rec);
       // An adopted launch's carried --model would otherwise win over the switch.
       const launch = rec.launch ? { ...rec.launch, args: withoutModelFlag(rec.launch.args) } : null;
       const next = { ...rec, model, modelAt: at, launch, ...moved };
@@ -3693,7 +3693,7 @@ export class Fleet extends EventEmitter {
     if (!rec.agentSessionId) throw new FleetError(409, "cannot tell which conversation that process is");
     const account = this.accountFor(rec, view);
     if (!account) throw new FleetError(409, "this session's account is not set up in agentbox");
-    const cwd = this.resumeDir(rec);
+    const cwd = await this.resumeDir(rec);
     if (!rec.transcriptPath || !existsSync(transcriptFile(rec.transcriptPath))) throw new FleetError(409, "its transcript is missing, so a resume would start empty");
     // Adopting stops the process, and what its turn left going (in-process
     // agents, workflows, background shells) dies with it rather than moving.
@@ -3781,7 +3781,7 @@ export class Fleet extends EventEmitter {
     if (!rec || !target || !from || !rec.agentSessionId) return false;
     let cwd: string;
     try {
-      cwd = this.resumeDir(rec);
+      cwd = await this.resumeDir(rec);
     } catch {
       return false; // cannot prove a resume: type into it where it is
     }
@@ -4032,7 +4032,7 @@ export class Fleet extends EventEmitter {
     if (!rec.agentSessionId || !rec.transcriptPath) throw new FleetError(409, "this session never started a conversation, so there is nothing to fork");
     const account = this.accountFor(rec, view);
     if (!account) throw new FleetError(409, "this session's account is no longer set up");
-    const cwd = this.resumeDir(rec);
+    const cwd = await this.resumeDir(rec);
 
     const forkAs = randomUUID();
     const newId = newSessionId();

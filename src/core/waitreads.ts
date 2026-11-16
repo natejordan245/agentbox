@@ -311,7 +311,7 @@ const UNTIL_MAX = 4_000;
  * it answers for.
  */
 export async function readUntil(spec: UntilSpec, wait: number, session: string, timeoutMs = UNTIL_TIMEOUT_S * 1000): Promise<{ yes: boolean; said: string }> {
-  ensureCheckout(spec.cwd);
+  await ensureCheckout(spec.cwd);
   // A separate POSIX process group bounds the shell *and* its children on
   // macOS/Linux. Killing only the shell leaves a blocked child holding pipes
   // open; GNU timeout is not installed on a stock Mac. The shorter internal

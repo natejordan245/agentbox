@@ -332,9 +332,9 @@ async function refreshSlow(): Promise<void> {
   slow.skillWarnings = skills.warnings;
   // From the database: sessions come and go, and which PR is whose with them.
   slow.prs = openPrs(fleet.sessions());
-  slow.tmuxMissing = !tmux.tmuxVersion();
   // Each of these runs a program; none belongs on the cold path.
   const deps = await dependencies(false);
+  slow.tmuxMissing = deps.tmux.state !== "ok";
   slow.depsOk = deps.tmux.state === "ok" && deps.git.state === "ok";
   slow.ghReady = deps.gh.state === "ok";
   slow.serviceInstalled = serviceInstalled();
@@ -887,7 +887,8 @@ const router = new Router(mapError)
       await detectProviders();
       scheduleCold();
     }
-    const health: Health = { version: VERSION, tmux: tmux.tmuxVersion(), providers: slow.providers, deps: await dependencies(refresh), revision: RUNNING_REVISION };
+    const deps = await dependencies(refresh);
+    const health: Health = { version: VERSION, tmux: deps.tmux.state === "ok" ? deps.tmux.detail : null, providers: slow.providers, deps, revision: RUNNING_REVISION };
     if (!booted) health.starting = startupProgress();
     return json(health);
   })
@@ -1326,7 +1327,7 @@ const router = new Router(mapError)
     const out = await fleet.close(params.id!, closed, b.orphan === true);
     // A checkout cut at a ref for it (`ref` in a start), once it is done:
     // gone when nothing in it would be lost, else left to the reclaim.
-    const removed = worktree ? removeDetachedWorktree(worktree) : false;
+    const removed = worktree ? await removeDetachedWorktree(worktree) : false;
     scheduleHot();
     return json({ ...out, ...(worktree ? { worktreeRemoved: removed } : {}) });
   })
@@ -1640,7 +1641,7 @@ const router = new Router(mapError)
     const { turns } = await turnIndex.list(id);
     return json(whereOnScreen(io.capture(), turns));
   })
-  .add("GET", "/api/sessions/:id/diff", ({ params }) => json(diffOf(fleet.get(params.id!))))
+  .add("GET", "/api/sessions/:id/diff", async ({ params }) => json(await diffOf(fleet.get(params.id!))))
   .add("GET", "/api/sessions/:id/load", async ({ params }) => {
     const s = fleet.get(params.id!);
     if (!s.pid) throw new HttpError(409, "session has no running process");
@@ -2232,7 +2233,7 @@ export async function startServer(): Promise<void> {
     websocket,
     fetch: (req, srv) => {
       // Loopback is the owner only when the owner's own user connected (src/server/peeruid.ts).
-      const other = otherUserRefusal(srv.requestIP(req)?.port, PORT);
+      const other = otherUserRefusal(srv.requestIP(req), PORT);
       return other ? fail(other, 403) : handle(req, srv);
     },
   });
@@ -2385,7 +2386,7 @@ async function listenOnTailnet(
           const from = srv.requestIP(req)?.address;
           // This machine at its own tailnet address is loopback by another name.
           if (from === self.ip) {
-            const other = otherUserRefusal(srv.requestIP(req)?.port, PORT);
+            const other = otherUserRefusal(srv.requestIP(req), PORT);
             if (other) return fail(other, 403);
           } else if (!from || !(await peers.isOwner(from))) return fail("only your own Tailscale devices may connect", 403);
           return handle(req, srv, self.names);

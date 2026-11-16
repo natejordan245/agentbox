@@ -1420,9 +1420,7 @@ export async function addRepo(ref: string): Promise<Repo> {
   if (existing) return existing;
 
   const isPath = /^[~./]/.test(trimmed) || trimmed.startsWith("/");
-  const record: Repo = isPath
-    ? localRepo(normalizeRef(trimmed))
-    : githubRepo(trimmed);
+  const record: Repo = await (isPath ? localRepo(normalizeRef(trimmed)) : githubRepo(trimmed));
   insertRepo(record);
   return getRepo(record.ref) ?? record;
 }
@@ -1434,7 +1432,7 @@ function normalizeRef(ref: string): string {
   return ref;
 }
 
-function localRepo(path: string): Repo {
+async function localRepo(path: string): Promise<Repo> {
   if (!isGitRepo(path)) throw new Error(`not a git repository: ${path}`);
   return {
     id: randomUUID(),
@@ -1442,14 +1440,14 @@ function localRepo(path: string): Repo {
     kind: "local",
     displayName: basename(path) || path,
     fullName: repoFullNameOf(path),
-    defaultBranch: resolveDefaultBranch(path),
+    defaultBranch: await resolveDefaultBranch(path),
     addedAt: Date.now(),
     worktreeDefault: null,
     setup: { copy: [], run: "" },
   };
 }
 
-function githubRepo(slug: string): Repo {
+async function githubRepo(slug: string): Promise<Repo> {
   if (!/^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/.test(slug)) {
     throw new Error(`use a local path or an owner/repo GitHub slug, not "${slug}"`);
   }
@@ -1462,15 +1460,15 @@ function githubRepo(slug: string): Repo {
     // Asked before the clone exists, so it goes to the remote directly. A
     // wrong answer here sends every worktree off the wrong branch, so failing
     // is better than assuming "main".
-    defaultBranch: remoteDefaultBranch(slug),
+    defaultBranch: await remoteDefaultBranch(slug),
     addedAt: Date.now(),
     worktreeDefault: null,
     setup: { copy: [], run: "" },
   };
 }
 
-function remoteDefaultBranch(slug: string): string {
-  const r = run(["git", "ls-remote", "--symref", `https://github.com/${slug}.git`, "HEAD"]);
+async function remoteDefaultBranch(slug: string): Promise<string> {
+  const r = await run(["git", "ls-remote", "--symref", `https://github.com/${slug}.git`, "HEAD"]);
   if (r.code !== 0) {
     throw new Error(`could not reach github.com/${slug}: ${r.stderr.split("\n")[0]?.trim() ?? "unknown error"}`);
   }

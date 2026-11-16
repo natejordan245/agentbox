@@ -9,7 +9,7 @@
 import { appendFileSync, existsSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
-import { ghErrorMessage, runAsync } from "./git";
+import { ghErrorMessage, run } from "./git";
 
 let token: string | null = null;
 
@@ -18,7 +18,7 @@ export class NoGhLogin extends Error {}
 
 async function ghToken(): Promise<string> {
   if (token) return token;
-  const r = await runAsync(["gh", "auth", "token", "--hostname", "github.com"], undefined, { GH_PROMPT_DISABLED: "1" });
+  const r = await run(["gh", "auth", "token", "--hostname", "github.com"], undefined, { GH_PROMPT_DISABLED: "1" });
   const t = r.stdout.trim();
   if (r.code !== 0 || !t) {
     const message = ghErrorMessage(r);

@@ -496,7 +496,7 @@ function dirOf(spec: ScheduleSpec): string | null {
  */
 async function runNote(s: Schedule, cwd: string | null): Promise<string> {
   if (!cwd) throw new Error("it has no directory to run in");
-  ensureCheckout(cwd);
+  await ensureCheckout(cwd);
   const p = Bun.spawn(["nice", "-n", "19", "timeout", "--kill-after=5", String(NOTE_TIMEOUT_S), "sh", "-c", s.noteCmd!], {
     cwd,
     stdin: "ignore",

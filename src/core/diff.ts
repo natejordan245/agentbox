@@ -1,6 +1,6 @@
 import { existsSync, readFileSync, statSync } from "node:fs";
 import { join } from "node:path";
-import { resolveDefaultBranch, run } from "./git";
+import { mapPool, resolveDefaultBranch, run } from "./git";
 import type { DiffFile, Session, SessionDiff } from "./types";
 
 /**
@@ -13,25 +13,20 @@ const MAX_PATCH_BYTES = 96 * 1024;
 const MAX_TOTAL_PATCH_BYTES = 3 * 1024 * 1024;
 /** Beyond this, per-file `git diff` spawns cost more than the review is worth. */
 const MAX_PATCH_FILES = 400;
+/** Patches read at once: each is a process, and the agents need the cores. */
+const PATCHES_AT_ONCE = 6;
 
 /** Which branch a session's work is judged against: the default branch of the
  *  repository its directory belongs to. */
-function baseFor(session: Session): string {
+function baseFor(session: Session): Promise<string> {
   const root = session.repoRoot;
-  if (!root) return "main";
+  if (!root) return Promise.resolve("main");
   // Cached: resolving can ask the remote, and `agentbox diff` may be asked often.
   let base = bases.get(root);
-  if (!base) {
-    try {
-      base = resolveDefaultBranch(root);
-    } catch {
-      base = "main";
-    }
-    bases.set(root, base);
-  }
+  if (!base) bases.set(root, (base = resolveDefaultBranch(root).catch(() => "main")));
   return base;
 }
-const bases = new Map<string, string>();
+const bases = new Map<string, Promise<string>>();
 
 /**
  * The diff a human reviews: this session's worktree against where it branched
@@ -41,38 +36,29 @@ const bases = new Map<string, string>();
  * file, and `git diff` alone renders that as nothing at all — a review screen
  * that silently omits new files is worse than no review screen.
  */
-export function diffOf(session: Session, base = baseFor(session)): SessionDiff {
+export async function diffOf(session: Session, base?: string): Promise<SessionDiff> {
+  base ??= await baseFor(session);
   const empty: SessionDiff = { base, files: [], additions: 0, deletions: 0, unavailable: true };
   const wt = session.worktree ?? session.cwd;
   if (!wt || !existsSync(wt)) return empty;
-  if (run(["git", "rev-parse", "--is-inside-work-tree"], wt).code !== 0) return empty;
+  if ((await run(["git", "rev-parse", "--is-inside-work-tree"], wt)).code !== 0) return empty;
 
-  const against = mergeBase(wt, base);
-  const files: DiffFile[] = [];
+  const against = await mergeBase(wt, base);
+  const [tracked, untracked] = await Promise.all([trackedFiles(wt, against), untrackedFiles(wt)]);
+  // Spent as the patches come in, a few at a time: the cap is on what a
+  // browser is sent, not a count to the byte.
   let budget = MAX_TOTAL_PATCH_BYTES;
-
-  const tracked = trackedFiles(wt, against);
-  const untracked = untrackedFiles(wt);
-  const all = [...tracked, ...untracked];
-
-  for (const [index, entry] of all.entries()) {
-    const withinCaps = index < MAX_PATCH_FILES && budget > 0;
-    let patch: string | null = null;
-    if (entry.binary) {
-      // `patch: null` is the type's way of saying "binary" — there is no text
-      // to show and a line count would be a lie.
-      files.push({ ...entry.file, patch: null });
-      continue;
+  const files = await mapPool([...tracked, ...untracked], PATCHES_AT_ONCE, async (entry, index): Promise<DiffFile> => {
+    // `patch: null` is the type's way of saying "binary" — there is no text
+    // to show and a line count would be a lie.
+    if (entry.binary) return { ...entry.file, patch: null };
+    if (index >= MAX_PATCH_FILES || budget <= 0) {
+      return { ...entry.file, patch: `… patch omitted: this diff exceeded ${MAX_PATCH_FILES} files or ${megabytes(MAX_TOTAL_PATCH_BYTES)} of patch text. The counts on this row are still exact.` };
     }
-    if (!withinCaps) {
-      patch = `… patch omitted: this diff exceeded ${MAX_PATCH_FILES} files or ${megabytes(MAX_TOTAL_PATCH_BYTES)} of patch text. The counts on this row are still exact.`;
-    } else {
-      const body = entry.untracked ? untrackedPatch(wt, entry.file.path) : trackedPatch(wt, against, entry.file.path);
-      patch = clamp(body);
-      budget -= patch.length;
-    }
-    files.push({ ...entry.file, patch });
-  }
+    const patch = clamp(await (entry.untracked ? untrackedPatch(wt, entry.file.path) : trackedPatch(wt, against, entry.file.path)));
+    budget -= patch.length;
+    return { ...entry.file, patch };
+  });
 
   return {
     base,
@@ -103,11 +89,11 @@ function clamp(patch: string): string {
  * Falls back to the empty tree when there is no common ancestor — a worktree on
  * an unrelated history still has a real diff, it is just "everything".
  */
-function mergeBase(wt: string, base: string): string {
+async function mergeBase(wt: string, base: string): Promise<string> {
   const candidates = [`origin/${base}`, base];
   for (const ref of candidates) {
-    if (run(["git", "rev-parse", "--verify", "--quiet", `${ref}^{commit}`], wt).code !== 0) continue;
-    const found = run(["git", "merge-base", ref, "HEAD"], wt);
+    if ((await run(["git", "rev-parse", "--verify", "--quiet", `${ref}^{commit}`], wt)).code !== 0) continue;
+    const found = await run(["git", "merge-base", ref, "HEAD"], wt);
     if (found.code === 0 && found.stdout.trim()) return found.stdout.trim();
   }
   // git's empty tree object: diffing against it yields the whole worktree.
@@ -136,9 +122,12 @@ const STATUS_LETTER: Record<string, DiffFile["status"]> = {
   T: "modified",
 };
 
-function trackedFiles(wt: string, against: string): Entry[] {
+async function trackedFiles(wt: string, against: string): Promise<Entry[]> {
   const statuses = new Map<string, DiffFile["status"]>();
-  const nameStatus = run(["git", "diff", "--name-status", "-M", "-z", against], wt);
+  const [nameStatus, numstat] = await Promise.all([
+    run(["git", "diff", "--name-status", "-M", "-z", against], wt),
+    run(["git", "diff", "--numstat", "-M", "-z", against], wt),
+  ]);
   if (nameStatus.code === 0) {
     const parts = records(nameStatus.stdout);
     for (let i = 0; i < parts.length; ) {
@@ -155,7 +144,6 @@ function trackedFiles(wt: string, against: string): Entry[] {
     }
   }
 
-  const numstat = run(["git", "diff", "--numstat", "-M", "-z", against], wt);
   if (numstat.code !== 0) return [];
   const out: Entry[] = [];
   const parts = records(numstat.stdout);
@@ -184,8 +172,8 @@ function trackedFiles(wt: string, against: string): Entry[] {
   return out;
 }
 
-function untrackedFiles(wt: string): Entry[] {
-  const r = run(["git", "ls-files", "--others", "--exclude-standard", "-z"], wt);
+async function untrackedFiles(wt: string): Promise<Entry[]> {
+  const r = await run(["git", "ls-files", "--others", "--exclude-standard", "-z"], wt);
   if (r.code !== 0) return [];
   const out: Entry[] = [];
   for (const path of records(r.stdout)) {
@@ -228,8 +216,8 @@ function probeNew(abs: string): { binary: boolean; lines: number } {
   return { binary: false, lines: text.endsWith("\n") ? newlines : newlines + 1 };
 }
 
-function trackedPatch(wt: string, against: string, path: string): string {
-  const r = run(["git", "diff", "-M", against, "--", path], wt);
+async function trackedPatch(wt: string, against: string, path: string): Promise<string> {
+  const r = await run(["git", "diff", "-M", against, "--", path], wt);
   return r.code === 0 ? r.stdout : `… could not read this file's patch: ${r.stderr.trim()}\n`;
 }
 
@@ -238,8 +226,8 @@ function trackedPatch(wt: string, against: string, path: string): string {
  * renders it as an addition; it exits 1 when there is a difference, which is
  * the expected outcome, so only a code above 1 is a real failure.
  */
-function untrackedPatch(wt: string, path: string): string {
-  const r = run(["git", "diff", "--no-index", "--", "/dev/null", path], wt);
+async function untrackedPatch(wt: string, path: string): Promise<string> {
+  const r = await run(["git", "diff", "--no-index", "--", "/dev/null", path], wt);
   if (r.code > 1) return `… could not read this file's patch: ${r.stderr.trim()}\n`;
   return r.stdout;
 }
