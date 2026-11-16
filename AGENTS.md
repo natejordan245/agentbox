@@ -151,6 +151,11 @@ edits unstaged.
   history is paged in SQL or done off the thread; a process is awaited, never
   `spawnSync`. The log names what held it (`held`, `loop_stalled`), and
   `agentbox profile` says where the time went (`src/server/vitals.ts`).
+- **A CLI call starts light.** Every agent runs `agentbox` all day, so what
+  `src/cli` imports at the top is paid on each call: nothing of the fleet,
+  the server or the org store (its database driver alone is 180 ms of CPU).
+  A command that needs one imports it when it runs. It asks the server for
+  the open board (`/api/state?open=1`) or one session, never all of history.
 - **Address tmux by session name**, never by pane id (`%12` is renumbered when
   the tmux server restarts). `src/core/tmux.ts` is the only thing that runs
   tmux.
