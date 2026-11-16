@@ -38,8 +38,9 @@ import type { Session, Wait, WaitEnd, WaitSpec, WaitView } from "./types";
 import { describe, short, span } from "./waitwords";
 
 const TICK_MS = 15_000;
-/** How often the pull requests waited on are read: one request for all of them. */
-const PR_EVERY_MS = 90_000;
+/** How often the pull requests waited on are read: one request for all of
+ *  them, which GitHub counts as one point of the hour's five thousand. */
+const PR_EVERY_MS = 30_000;
 const RUN_EVERY_MS = 60_000;
 /** Every look failing for this long is a wait that cannot watch: its session is told. */
 const BROKEN_AFTER_MS = 20 * 60_000;
