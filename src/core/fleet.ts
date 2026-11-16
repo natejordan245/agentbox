@@ -1695,6 +1695,8 @@ export class Fleet extends EventEmitter {
           // The board says so now, not a tick from now: a message sent in
           // between must resume it, not type into a pane that is gone.
           this.views.set(v.id, { ...v, status: v.status === "closed" ? "closed" : "waiting", host: "none", pid: null, tmux: null, parkedAt: now, parkHold: null, background: false, work: null });
+          // Not the view its JSON was taken from: the next pass takes it again.
+          this.fingerprints.delete(v.id);
           parked = true;
           const team = check.mates.length ? `, with teammates ${check.mates.join(", ")}` : "";
           console.log(`agentbox: parked ${v.id} (${v.title}) after ${minutes(now - v.lastActivityAt)} idle${team}`);
@@ -2699,6 +2701,13 @@ export class Fleet extends EventEmitter {
 
   sessions(): Session[] {
     return [...this.views.values()];
+  }
+
+  /** A session's view as JSON, as the pass that last drew it left it: the
+   *  state's bodies and frames are put together from these, not serialized
+   *  again for each asker. */
+  viewJson(id: string): string | undefined {
+    return this.fingerprints.get(id);
   }
 
   get(id: string): Session {

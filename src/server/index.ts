@@ -285,6 +285,16 @@ function hotState(open = false): HotState {
 }
 
 /**
+ * A board session as JSON: the fleet's own of its view, taken once when the
+ * view was drawn, with its attention put in. Serializing every session there
+ * has been for each asker held the thread a third of a second a time.
+ */
+function sessionJson(s: HotState["sessions"][number]): string {
+  const view = fleet.viewJson(s.id);
+  return view ? `${view.slice(0, -1)},"attention":${JSON.stringify(s.attention)}}` : JSON.stringify(s);
+}
+
+/**
  * What the last frame to the sockets said of each open session, by id. A
  * frame carries only what differs from it; a socket just connected is sent
  * the board whole and then the same frames as everyone, which, each taken
@@ -298,7 +308,7 @@ function hotDelta(): Extract<ServerMessage, { type: "hotDelta" }> | null {
   const next = new Map<string, string>();
   const changed: HotState["sessions"] = [];
   for (const s of sessions) {
-    const fp = JSON.stringify(s);
+    const fp = sessionJson(s);
     next.set(s.id, fp);
     if (sentOpen.get(s.id) !== fp) changed.push(s);
   }
@@ -582,7 +592,9 @@ function stateResponse(open: boolean): Response {
   const now = Date.now();
   let b = stateBodies.get(open);
   if (!b || now - b.at > STATE_BODY_MS) {
-    b = { at: now, body: JSON.stringify({ ok: true, data: { ...hotState(open), ...coldState() }, error: null }) };
+    const { sessions, ...rest } = hotState(open);
+    const others = JSON.stringify({ ...rest, ...coldState() });
+    b = { at: now, body: `{"ok":true,"data":{"sessions":[${sessions.map(sessionJson).join(",")}],${others.slice(1)},"error":null}` };
     stateBodies.set(open, b);
   }
   return new Response(b.body, { headers: { "content-type": "application/json" } });
