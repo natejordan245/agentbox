@@ -29,7 +29,7 @@ export async function awaitAnswer(rt: Runtime, pane: string, question: string | 
   const start = Date.now();
   let seen = false;
   while (Date.now() - start < timeoutMs) {
-    const p = readBtwPanel(rt.capture(pane) ?? "");
+    const p = readBtwPanel((await rt.capture(pane)) ?? "");
     if (!p) {
       if (seen) throw new BtwError("the /btw panel was closed before it answered");
       if (Date.now() - start > openMs) throw new BtwError("the /btw panel did not open");
@@ -49,13 +49,13 @@ export async function awaitAnswer(rt: Runtime, pane: string, question: string | 
  *  It copies to the desktop clipboard too: what you had there is put back. */
 export async function copyAnswer(rt: Runtime, pane: string): Promise<string> {
   if (!rt.bufferNames || !rt.takeBuffer) throw new BtwError("cannot read tmux's paste buffers here");
-  const before = new Set(rt.bufferNames());
+  const before = new Set(await rt.bufferNames());
   const restore = keepClipboard();
-  rt.sendKeys(pane, ["c"]);
+  await rt.sendKeys(pane, ["c"]);
   for (let t = 0; t < 3_000; t += 50) {
     await Bun.sleep(50);
-    const added = rt.bufferNames().find((b) => !before.has(b));
-    const text = added ? rt.takeBuffer(added) : null;
+    const added = (await rt.bufferNames()).find((b) => !before.has(b));
+    const text = added ? await rt.takeBuffer(added) : null;
     if (text !== null) {
       const answer = text.replace(/\s+$/, "");
       await restore(answer);
@@ -72,11 +72,11 @@ export async function copyAnswer(rt: Runtime, pane: string): Promise<string> {
  * prompt, Escape interrupts the turn.
  */
 export async function closePanel(rt: Runtime, pane: string): Promise<void> {
-  if (!readBtwPanel(rt.capture(pane) ?? "")) return;
-  rt.sendKeys(pane, ["Escape"]);
+  if (!readBtwPanel((await rt.capture(pane)) ?? "")) return;
+  await rt.sendKeys(pane, ["Escape"]);
   for (let t = 0; t < 3_000; t += 100) {
     await Bun.sleep(100);
-    if (!readBtwPanel(rt.capture(pane) ?? "")) break;
+    if (!readBtwPanel((await rt.capture(pane)) ?? "")) break;
   }
   await Bun.sleep(150);
 }
@@ -87,7 +87,7 @@ export async function closePanel(rt: Runtime, pane: string): Promise<void> {
  * asking is let finish first (its answer is kept: `Fleet.watchTerminalBtw`).
  */
 export async function clearPanel(rt: Runtime, pane: string): Promise<void> {
-  const p = readBtwPanel(rt.capture(pane) ?? "");
+  const p = readBtwPanel((await rt.capture(pane)) ?? "");
   if (!p) return;
   if (p.state === "asking") await awaitAnswer(rt, pane, null, 0, 2 * 60_000).catch(() => {});
   await closePanel(rt, pane);

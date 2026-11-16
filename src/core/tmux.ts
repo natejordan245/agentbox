@@ -25,23 +25,25 @@ export interface TmuxResult {
   stderr: string;
 }
 
-function tmux(args: string[], input?: string): TmuxResult {
-  const p = Bun.spawnSync(["tmux", "-L", tmuxSocket(), ...args], {
-    stdin: input === undefined ? "ignore" : new TextEncoder().encode(input),
-    stdout: "pipe",
-    stderr: "pipe",
-  });
-  return { code: p.exitCode ?? -1, stdout: p.stdout.toString(), stderr: p.stderr.toString() };
+/** Run a command to its end without holding up the server. A program that
+ *  is not installed is a failed command (`MISSING`), not a throw: several
+ *  callers do not wait for the answer. */
+async function ran(cmd: string[], input?: string): Promise<TmuxResult> {
+  try {
+    const p = Bun.spawn(cmd, { stdin: input === undefined ? "ignore" : new TextEncoder().encode(input), stdout: "pipe", stderr: "pipe" });
+    const [stdout, stderr, code] = await Promise.all([new Response(p.stdout).text(), new Response(p.stderr).text(), p.exited]);
+    return { code, stdout, stderr };
+  } catch (e) {
+    return { code: MISSING, stdout: "", stderr: `${cmd[0]}: ${(e as Error).message}` };
+  }
 }
+/** The shell's "command not found". */
+const MISSING = 127;
 
-/** `tmux` without holding up the server: on a loaded machine the tmux server
- *  can take a few hundred ms to answer, and a spawnSync stops every request
- *  for that long. */
-async function tmuxAsync(args: string[]): Promise<TmuxResult> {
-  const p = Bun.spawn(["tmux", "-L", tmuxSocket(), ...args], { stdin: "ignore", stdout: "pipe", stderr: "pipe" });
-  const [stdout, stderr, code] = await Promise.all([new Response(p.stdout).text(), new Response(p.stderr).text(), p.exited]);
-  return { code, stdout, stderr };
-}
+/** tmux on our socket. Never with spawnSync: on a loaded machine the tmux
+ *  server can take a few hundred ms to answer, and every request, terminal
+ *  and CLI call would wait behind each one. */
+const tmux = (args: string[], input?: string): Promise<TmuxResult> => ran(["tmux", "-L", tmuxSocket(), ...args], input);
 
 export const tmuxName = (sessionId: string): string => `ab-${sessionId}`;
 
@@ -115,7 +117,7 @@ const INHERITED_IDENTITY = [
 
 /** Start `argv` in a new detached tmux session. Returns the pane's pid — the
  *  agent itself, since `env` execs it. */
-export function newSession(s: NewSession): number {
+export async function newSession(s: NewSession): Promise<number> {
   // `env -u` rather than tmux's `-e`: tmux can add variables but not remove
   // one the server inherited, and a stray CLAUDE_CONFIG_DIR from the shell
   // that started agentbox would put the session on the wrong account.
@@ -140,7 +142,7 @@ export function newSession(s: NewSession): number {
     "-P", "-F", "#{pane_pid}",
     "--", ...cmd,
   );
-  const r = tmux(["list-sessions"]).code === 0 ? tmux(args) : startServer(args);
+  const r = (await tmux(["list-sessions"])).code === 0 ? await tmux(args) : await startServer(args);
   if (r.code !== 0 && launcher) rmSync(launcher, { force: true });
   if (r.code !== 0 && secrets) rmSync(secrets, { force: true });
   if (r.code !== 0) throw new Error(`tmux could not start the session: ${r.stderr.trim() || r.stdout.trim()}`);
@@ -193,22 +195,12 @@ const LAUNCHER_TTL_MS = 60_000;
  * scope goes unnamed (`run-….scope`) rather than not being one. Only without
  * systemd does tmux run plainly.
  */
-function startServer(args: string[]): TmuxResult {
-  const scoped = (unit: string[]): TmuxResult | null => {
-    try {
-      const p = Bun.spawnSync(["systemd-run", "--user", "--scope", "--collect", "--quiet", ...unit, "-p", "CPUWeight=1000", "tmux", "-L", tmuxSocket(), ...args], {
-        stdin: "ignore",
-        stdout: "pipe",
-        stderr: "pipe",
-      });
-      return { code: p.exitCode ?? -1, stdout: p.stdout?.toString() ?? "", stderr: p.stderr?.toString() ?? "" };
-    } catch {
-      return null;
-    }
-  };
-  let r = scoped(["--unit=agentbox-tmux"]);
-  if (r && r.code !== 0 && /already loaded|already exists/i.test(r.stderr)) r = scoped([]);
-  if (!r) return tmux(args);
+async function startServer(args: string[]): Promise<TmuxResult> {
+  const scoped = (unit: string[]): Promise<TmuxResult> =>
+    ran(["systemd-run", "--user", "--scope", "--collect", "--quiet", ...unit, "-p", "CPUWeight=1000", "tmux", "-L", tmuxSocket(), ...args]);
+  let r = await scoped(["--unit=agentbox-tmux"]);
+  if (r.code !== 0 && /already loaded|already exists/i.test(r.stderr)) r = await scoped([]);
+  if (r.code === MISSING) return tmux(args);
   if (r.code !== 0 && /transient|systemd|Failed to connect/i.test(r.stderr)) return tmux(args);
   return r;
 }
@@ -236,7 +228,7 @@ export async function listPanes(): Promise<PaneInfo[]> {
   // `|` and not a tab: under a non-UTF-8 locale tmux rewrites tabs in `-F`
   // output, and every pane then failed to parse. Session names are `ab-<id>`,
   // so a `|` in one is not possible.
-  const r = await tmuxAsync([
+  const r = await tmux([
     "list-panes", "-a", "-F",
     "#{session_name}|#{pane_pid}|#{pane_dead}|#{pane_dead_status}|#{session_attached}|#{pane_width}|#{pane_height}|#{pid}|#{start_time}|#{window_activity}",
   ]);
@@ -317,9 +309,9 @@ export async function sendText(name: string, text: string, opts: { pieces?: numb
   if (!(await bracketedPasteOn(name))) {
     throw new Unsubmitted(`its TUI did not turn bracketed paste on in ${STARVED_WAIT_MS / 1000}s, so it is not reading its terminal and nothing was typed`, false);
   }
-  const before = screenRows(name);
-  if (opts.pieces) pasteInPieces(name, text, opts.pieces);
-  else pasteBuffers(name, [text]);
+  const before = await screenRows(name);
+  if (opts.pieces) await pasteInPieces(name, text, opts.pieces);
+  else await pasteBuffers(name, [text]);
   const draft = await draftRow(name, text, before);
   if (!draft) {
     throw new Unsubmitted(`its pane showed nothing of the message for ${STARVED_WAIT_MS / 1000}s, so Enter was not pressed: a dialog may be up, or it is not reading its terminal`);
@@ -335,7 +327,7 @@ export async function sendText(name: string, text: string, opts: { pieces?: numb
  */
 export async function submitDraft(name: string, text: string): Promise<boolean> {
   const said = text.replace(/\s+/g, "");
-  const rows = screenRows(name);
+  const rows = await screenRows(name);
   for (let index = rows.length - 1; index >= 0; index--) {
     const head = rowHead(rows[index]!);
     if (head.words.length < Math.min(6, said.length) || !said.startsWith(head.words)) continue;
@@ -347,18 +339,18 @@ export async function submitDraft(name: string, text: string): Promise<boolean> 
 
 async function submit(name: string, draft: DraftRow): Promise<void> {
   for (let press = 0; press < ENTER_TRIES; press++) {
-    sendKeys(name, ["Enter"]);
+    await sendKeys(name, ["Enter"]);
     if (await leftRow(name, draft)) return;
   }
   throw new Unsubmitted(`the message was typed, but it is still in the input box after Enter was pressed ${ENTER_TRIES} times: something on its screen is taking the key`);
 }
 
-const screenRows = (name: string): string[] => (capture(name) ?? "").split("\n");
+const screenRows = async (name: string): Promise<string[]> => ((await capture(name)) ?? "").split("\n");
 
 async function bracketedPasteOn(name: string): Promise<boolean> {
   const deadline = Date.now() + STARVED_WAIT_MS;
   for (;;) {
-    const r = await tmuxAsync(["display-message", "-p", "-t", `=${name}:`, "#{bracket_paste_flag}"]);
+    const r = await tmux(["display-message", "-p", "-t", `=${name}:`, "#{bracket_paste_flag}"]);
     const flag = r.stdout.trim();
     if (flag === "1" || (r.code === 0 && flag === "")) return true;
     if (r.code !== 0 || Date.now() >= deadline) return false;
@@ -398,7 +390,7 @@ async function draftRow(name: string, text: string, before: string[]): Promise<D
   const said = text.replace(/\s+/g, "");
   const started = Date.now();
   for (;;) {
-    const rows = screenRows(name);
+    const rows = await screenRows(name);
     const changed = rows.map((row, index) => ({ index, row, ...rowHead(row) })).filter((r) => r.row !== before[r.index] && r.words);
     const shown = changed.find((r) => r.words.length >= Math.min(6, said.length) && said.includes(r.words));
     const waited = Date.now() - started;
@@ -417,7 +409,7 @@ async function draftRow(name: string, text: string, before: string[]): Promise<D
 async function leftRow(name: string, draft: DraftRow): Promise<boolean> {
   const deadline = Date.now() + ENTER_WAIT_MS;
   for (;;) {
-    const rows = screenRows(name);
+    const rows = await screenRows(name);
     const now = rowHead(rows[draft.index] ?? "");
     if (now.words !== draft.words || now.frame !== draft.frame || rowsBelow(rows, draft.index) > draft.below) return true;
     if (Date.now() >= deadline) return false;
@@ -435,13 +427,13 @@ const PASTE_BATCH = 40;
  * TUI the message was typed: no single paste is long enough, or has line
  * breaks enough, for it to be set apart as pasted.
  */
-function pasteInPieces(name: string, text: string, max: number): void {
+async function pasteInPieces(name: string, text: string, max: number): Promise<void> {
   const steps: (string | null)[] = [];
   for (const [i, line] of text.split(/\r\n|\r|\n/).entries()) {
     if (i > 0) steps.push(null);
     steps.push(...pieces(line, max));
   }
-  for (let i = 0; i < steps.length; i += PASTE_BATCH) pasteBuffers(name, steps.slice(i, i + PASTE_BATCH));
+  for (let i = 0; i < steps.length; i += PASTE_BATCH) await pasteBuffers(name, steps.slice(i, i + PASTE_BATCH));
 }
 
 /** `line` cut every `max` UTF-16 units (what a TUI written in JS counts), never inside a surrogate pair. */
@@ -458,7 +450,7 @@ function pieces(line: string, max: number): string[] {
 }
 
 /** Paste each string, in order and in one tmux invocation; a `null` is a line break pressed as a key. */
-function pasteBuffers(name: string, steps: (string | null)[]): void {
+async function pasteBuffers(name: string, steps: (string | null)[]): Promise<void> {
   const target = `=${name}:`;
   const args = LEAVE_MODE(name).slice(0, -1);
   for (const [i, step] of steps.entries()) {
@@ -467,41 +459,41 @@ function pasteBuffers(name: string, steps: (string | null)[]): void {
       continue;
     }
     const buffer = `ab-${process.pid}-${Date.now()}-${i}`;
-    const load = tmux(["load-buffer", "-b", buffer, "-"], step);
+    const load = await tmux(["load-buffer", "-b", buffer, "-"], step);
     if (load.code !== 0) throw new Error(`tmux load-buffer failed: ${load.stderr.trim()}`);
     args.push(";", "paste-buffer", "-p", "-d", "-b", buffer, "-t", target);
   }
-  const paste = tmux(args);
+  const paste = await tmux(args);
   if (paste.code !== 0) throw new Error(`tmux paste failed: ${paste.stderr.trim()}`);
 }
 
 /** The paste buffers' names, newest first. A TUI that copies inside tmux adds one (`load-buffer`). */
-export function bufferNames(): string[] {
-  const r = tmux(["list-buffers", "-F", "#{buffer_name}"]);
+export async function bufferNames(): Promise<string[]> {
+  const r = await tmux(["list-buffers", "-F", "#{buffer_name}"]);
   return r.code === 0 ? r.stdout.split("\n").filter(Boolean) : [];
 }
 
 /** A paste buffer's contents, and the buffer gone. */
-export function takeBuffer(buffer: string): string | null {
-  const r = tmux(["show-buffer", "-b", buffer]);
+export async function takeBuffer(buffer: string): Promise<string | null> {
+  const r = await tmux(["show-buffer", "-b", buffer]);
   if (r.code !== 0) return null;
-  tmux(["delete-buffer", "-b", buffer]);
+  await tmux(["delete-buffer", "-b", buffer]);
   return r.stdout;
 }
 
 /** Press keys by tmux name: `Enter`, `Escape`, `C-c`, `Down`, or literal text. */
-export function sendKeys(name: string, keys: string[]): void {
+export async function sendKeys(name: string, keys: string[]): Promise<void> {
   if (keys.length === 0) return;
-  const r = tmux([...LEAVE_MODE(name), "send-keys", "-t", `=${name}:`, ...keys]);
+  const r = await tmux([...LEAVE_MODE(name), "send-keys", "-t", `=${name}:`, ...keys]);
   if (r.code !== 0) throw new Error(`tmux send-keys failed: ${r.stderr.trim()}`);
 }
 
 /** The visible screen as plain text (or with colour escapes). */
-export function capture(name: string, opts: { ansi?: boolean; scrollback?: number } = {}): string | null {
+export async function capture(name: string, opts: { ansi?: boolean; scrollback?: number } = {}): Promise<string | null> {
   const args = ["capture-pane", "-p", "-J", "-t", `=${name}:`];
   if (opts.ansi) args.push("-e");
   if (opts.scrollback) args.push("-S", String(-opts.scrollback));
-  const r = tmux(args);
+  const r = await tmux(args);
   return r.code === 0 ? r.stdout : null;
 }
 
@@ -516,7 +508,7 @@ export async function captureMany(names: string[]): Promise<Map<string, string |
   let pending = names;
   while (pending.length) {
     const args = pending.flatMap((n) => ["display-message", "-p", `${marker}${n}`, ";", "capture-pane", "-p", "-J", "-t", `=${n}:`, ";"]);
-    const r = await tmuxAsync(args.slice(0, -1));
+    const r = await tmux(args.slice(0, -1));
     let name: string | null = null;
     let lines: string[] = [];
     const flush = () => {
@@ -546,12 +538,12 @@ export async function captureMany(names: string[]): Promise<Map<string, string |
  * column wide — too narrow to read a dialog off. Returns whether anything
  * changed, so a caller undoes only its own zoom.
  */
-export function setZoom(name: string, on: boolean): boolean {
-  const r = tmux(["display-message", "-p", "-t", `=${name}:`, "#{window_panes} #{window_zoomed_flag}"]);
+export async function setZoom(name: string, on: boolean): Promise<boolean> {
+  const r = await tmux(["display-message", "-p", "-t", `=${name}:`, "#{window_panes} #{window_zoomed_flag}"]);
   if (r.code !== 0) return false;
   const [panes, zoomed] = r.stdout.trim().split(" ");
   if (Number(panes) <= 1 || (zoomed === "1") === on) return false;
-  return tmux(["resize-pane", "-Z", "-t", `=${name}:`]).code === 0;
+  return (await tmux(["resize-pane", "-Z", "-t", `=${name}:`])).code === 0;
 }
 
 /**
@@ -561,18 +553,18 @@ export function setZoom(name: string, on: boolean): boolean {
  * dialog drawn at that size cannot be read off it. Resizing pins the size
  * (`window-size manual`); unsetting that hands it back to the next client.
  */
-export function unsquash(name: string, min = { cols: 80, rows: 24 }, to = { cols: 140, rows: 45 }): boolean {
-  const r = tmux(["display-message", "-p", "-t", `=${name}:`, "#{session_attached} #{window_width} #{window_height}"]);
+export async function unsquash(name: string, min = { cols: 80, rows: 24 }, to = { cols: 140, rows: 45 }): Promise<boolean> {
+  const r = await tmux(["display-message", "-p", "-t", `=${name}:`, "#{session_attached} #{window_width} #{window_height}"]);
   if (r.code !== 0) return false;
   const [attached, cols, rows] = r.stdout.trim().split(" ").map(Number);
   if (attached !== 0 || (cols! >= min.cols && rows! >= min.rows)) return false;
-  if (tmux(["resize-window", "-t", `=${name}:`, "-x", String(to.cols), "-y", String(to.rows)]).code !== 0) return false;
-  tmux(["set-option", "-w", "-u", "-t", `=${name}:`, "window-size"]);
+  if ((await tmux(["resize-window", "-t", `=${name}:`, "-x", String(to.cols), "-y", String(to.rows)])).code !== 0) return false;
+  await tmux(["set-option", "-w", "-u", "-t", `=${name}:`, "window-size"]);
   return true;
 }
 
-export function killSession(name: string): void {
-  tmux(["kill-session", "-t", `=${name}`]);
+export async function killSession(name: string): Promise<void> {
+  await tmux(["kill-session", "-t", `=${name}`]);
 }
 
 /**
@@ -584,19 +576,19 @@ export function killSession(name: string): void {
  * decide again, or leaves a window nobody is looking at the bigger size.
  * Returns whether it grew, so a caller undoes only its own.
  */
-export function setRoomy(name: string, on: boolean, min = { cols: 80, rows: 24 }, to = { cols: 140, rows: 45 }): boolean {
-  const r = tmux(["display-message", "-p", "-t", `=${name}:`, "#{session_attached} #{window_width} #{window_height}"]);
+export async function setRoomy(name: string, on: boolean, min = { cols: 80, rows: 24 }, to = { cols: 140, rows: 45 }): Promise<boolean> {
+  const r = await tmux(["display-message", "-p", "-t", `=${name}:`, "#{session_attached} #{window_width} #{window_height}"]);
   if (r.code !== 0) return false;
   const [attached, cols, rows] = r.stdout.trim().split(" ").map(Number);
   if (!on) {
-    tmux(["set-option", "-w", "-u", "-t", `=${name}:`, "window-size"]);
-    if (attached! > 0) tmux(["resize-window", "-A", "-t", `=${name}:`]);
+    await tmux(["set-option", "-w", "-u", "-t", `=${name}:`, "window-size"]);
+    if (attached! > 0) await tmux(["resize-window", "-A", "-t", `=${name}:`]);
     return true;
   }
   if (cols! >= min.cols && rows! >= min.rows) return false;
   const x = Math.max(cols!, to.cols);
   const y = Math.max(rows!, to.rows);
-  return tmux(["resize-window", "-t", `=${name}:`, "-x", String(x), "-y", String(y)]).code === 0;
+  return (await tmux(["resize-window", "-t", `=${name}:`, "-x", String(x), "-y", String(y)])).code === 0;
 }
 
 /** The argv that attaches a terminal to a session. */

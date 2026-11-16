@@ -68,11 +68,11 @@ test("a session the fleet starts carries no prompt on its command line", async (
   const launches: NewSession[] = [];
   const runtime: Runtime = {
     listPanes: async () => [],
-    newSession: s => { launches.push(s); return 0; },
-    killSession: () => {},
+    newSession: async s => { launches.push(s); return 0; },
+    killSession: async () => {},
     sendText: async () => {},
-    sendKeys: () => {},
-    capture: () => null,
+    sendKeys: async () => {},
+    capture: async () => null,
     captureMany: async () => new Map(),
   };
   insertAccount({ ...account, id: "fixture-account", provider: "claude", home: join(dir, "account"), isDefault: false });

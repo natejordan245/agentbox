@@ -1170,7 +1170,7 @@ const router = new Router(mapError)
     if (!Array.isArray(b.keys) || !b.keys.every((k) => typeof k === "string" && k.length > 0 && k.length < 64)) {
       throw new HttpError(400, "keys must be a list of tmux key names");
     }
-    fleet.keys(params.id!, b.keys as string[]);
+    await fleet.keys(params.id!, b.keys as string[]);
     return json(null);
   })
   .add("POST", "/api/sessions/:id/answer", async ({ req, params }) => {
@@ -1639,7 +1639,7 @@ const router = new Router(mapError)
     const id = params.id!;
     const { io } = seekable(id);
     const { turns } = await turnIndex.list(id);
-    return json(whereOnScreen(io.capture(), turns));
+    return json(whereOnScreen(await io.capture(), turns));
   })
   .add("GET", "/api/sessions/:id/diff", async ({ params }) => json(await diffOf(fleet.get(params.id!))))
   .add("GET", "/api/sessions/:id/load", async ({ params }) => {
@@ -1656,7 +1656,7 @@ const router = new Router(mapError)
     return json(t);
   })
   .add("GET", "/api/sessions/:id/attach", ({ params }) => json({ argv: fleet.attachCommand(params.id!) }))
-  .add("GET", "/api/sessions/:id/screen", ({ params }) => json({ text: fleet.screen(params.id!) }))
+  .add("GET", "/api/sessions/:id/screen", async ({ params }) => json({ text: await fleet.screen(params.id!) }))
   .add("GET", "/api/grep", async ({ req, url }) => {
     const pattern = url.searchParams.get("q") ?? "";
     if (!pattern) throw new HttpError(400, "q is required");

@@ -133,8 +133,8 @@ export function whereOnScreen(screen: string, turns: readonly Turn[]): { turnId:
 export const canSeek = (provider: ProviderId): boolean => provider === "claude" || provider === "codex";
 
 export interface SeekIO {
-  capture(): string;
-  keys(keys: string[]): void;
+  capture(): Promise<string>;
+  keys(keys: string[]): Promise<void>;
   sleep(ms: number): Promise<void>;
 }
 
@@ -152,13 +152,13 @@ async function settle(io: SeekIO, before: string): Promise<string> {
   const was = body(before);
   for (let waited = 0; waited < 600; waited += 30) {
     await io.sleep(30);
-    const now = io.capture();
+    const now = await io.capture();
     if (body(now) !== was) {
       await io.sleep(30);
-      return io.capture();
+      return await io.capture();
     }
   }
-  return io.capture();
+  return await io.capture();
 }
 
 /**
@@ -175,11 +175,11 @@ export async function seekTurn(
   const keys = keysOf(turns);
   if (!keys[target]?.text) return { found: false, reason: "It has no text to look for in the terminal." };
   const started = Date.now();
-  let screen = io.capture();
+  let screen = await io.capture();
   let lines = screen.split("\n");
 
   if (opts.claude && target < turns.length * 0.4 && place(lines, keys).every((p) => p.turn > target)) {
-    io.keys(["C-Home"]);
+    await io.keys(["C-Home"]);
     screen = await settle(io, screen);
     lines = screen.split("\n");
   }
@@ -229,7 +229,7 @@ export async function seekTurn(
     dir = want;
     nearest = near;
 
-    io.keys(Array.from({ length: pages }, () => (want === "up" ? "PageUp" : "PageDown")));
+    await io.keys(Array.from({ length: pages }, () => (want === "up" ? "PageUp" : "PageDown")));
     const next = await settle(io, screen);
     if (body(next) === body(screen)) {
       if (want === "down") return { found: false, reason: "It is not in the terminal's history; a /clear or a compaction may have dropped it." };
@@ -245,12 +245,12 @@ export async function seekTurn(
 /** Back to the latest: Claude has a key for it; Codex is paged down until it stops saying it is scrolled. */
 export async function seekBottom(io: SeekIO, opts: { claude: boolean }): Promise<void> {
   if (opts.claude) {
-    io.keys(["C-End"]);
+    await io.keys(["C-End"]);
     return;
   }
-  let screen = io.capture();
+  let screen = await io.capture();
   for (let i = 0; i < 100 && isScrolled(screen); i++) {
-    io.keys(["PageDown", "PageDown", "PageDown", "PageDown"]);
+    await io.keys(["PageDown", "PageDown", "PageDown", "PageDown"]);
     const next = await settle(io, screen);
     if (body(next) === body(screen)) return;
     screen = next;

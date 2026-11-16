@@ -206,22 +206,22 @@ const TOKEN_SAMPLE_MS = 60_000;
 const MATCH_WINDOW_MS = 10 * 60_000;
 
 export interface Runtime {
-  newSession(s: NewSession): number;
+  newSession(s: NewSession): Promise<number>;
   listPanes(): Promise<PaneInfo[]>;
   sendText(name: string, text: string, opts?: { pieces?: number }): Promise<void>;
   /** Enter on a message `sendText` left in the input box; false when the pane does not show it. */
   submitDraft?(name: string, text: string): Promise<boolean>;
-  sendKeys(name: string, keys: string[]): void;
-  capture(name: string, opts?: { ansi?: boolean; scrollback?: number }): string | null;
+  sendKeys(name: string, keys: string[]): Promise<void>;
+  capture(name: string, opts?: { ansi?: boolean; scrollback?: number }): Promise<string | null>;
   captureMany(names: string[]): Promise<Map<string, string | null>>;
-  killSession(name: string): void;
-  setZoom?(name: string, on: boolean): boolean;
+  killSession(name: string): Promise<void>;
+  setZoom?(name: string, on: boolean): Promise<boolean>;
   /** A window too small to read a dialog off grown for a while, or handed back; whether it grew. */
-  setRoomy?(name: string, on: boolean): boolean;
+  setRoomy?(name: string, on: boolean): Promise<boolean>;
   /** A window left at a gone client's small size back to a readable one; whether it changed. */
-  unsquash?(name: string): boolean;
-  bufferNames?(): string[];
-  takeBuffer?(buffer: string): string | null;
+  unsquash?(name: string): Promise<boolean>;
+  bufferNames?(): Promise<string[]>;
+  takeBuffer?(buffer: string): Promise<string | null>;
 }
 
 interface UsageSource {
@@ -396,6 +396,8 @@ export class Fleet extends EventEmitter {
    *  restart, which counts a claim made just before it as already measured. */
   private wokeAt = new Map<string, number>();
   private answered = new Map<string, { sig: string; at: number; tries: number }>();
+  /** Sessions whose start-up dialog the last pass was answering (`answerStartUps`). */
+  private answering = new Set<string>();
   /** Permission prompts `approvePrompt` has pressed Yes on, by session. */
   private approved = new Map<string, { sig: string; at: number; tries: number }>();
   private blocked = new Map<string, string>();
@@ -741,6 +743,7 @@ export class Fleet extends EventEmitter {
     this.linkParents(since);
     this.reapDeadPanes(now);
     this.reapParked(now);
+    await this.answerStartUps(now);
     this.rebuildViews(since, now);
     lap("views");
     // A frozen session looks hung and idle: nothing is parked or nudged
@@ -1549,7 +1552,7 @@ export class Fleet extends EventEmitter {
       if (!this.deadSince.has(pane.name)) this.parkExited(pane, now);
       const since = this.deadSince.get(pane.name) ?? now;
       this.deadSince.set(pane.name, since);
-      if (now - since > DEAD_PANE_MS && pane.clients === 0) this.killTmux(pane.name);
+      if (now - since > DEAD_PANE_MS && pane.clients === 0) void this.killTmux(pane.name);
     }
   }
 
@@ -1674,7 +1677,7 @@ export class Fleet extends EventEmitter {
             continue;
           }
           const starts = check.agentPids.map((pid) => [pid, startedAtOf(pid)] as const);
-          this.killTmux(v.tmux!);
+          await this.killTmux(v.tmux!);
           clean.delete(v.id);
           if (await this.paneAlive(v.tmux)) {
             holds.set(v.id, "tmux did not stop it");
@@ -2216,13 +2219,13 @@ export class Fleet extends EventEmitter {
       this.stuck.set(s.id, spell);
       if (spell.told || now - spell.since < what.hold) continue;
       spell.told = true;
-      this.tellParent(s, what.text());
+      void Promise.resolve(what.text()).then((text) => this.tellParent(s, text)).catch((e) => console.error(`agentbox: telling ${s.id}'s parent:`, e));
     }
     for (const id of this.stuck.keys()) if (!stuck.has(id)) this.stuck.delete(id);
     this.childrenSeen = true;
   }
 
-  private stuckOn(s: Session, now: number): { text: () => string; hold: number } | null {
+  private stuckOn(s: Session, now: number): { text: () => string | Promise<string>; hold: number } | null {
     if (s.status === "blocked") {
       const why = this.blocked.get(s.id);
       if (!why || s.question || why === "asking a question" || retrying(s)) return null;
@@ -2236,8 +2239,8 @@ export class Fleet extends EventEmitter {
     const pane = w && s.host === "none" ? this.panes.get(s.tmux ?? "") : undefined;
     if (!w || !pane?.dead || (this.killedAt.get(pane.name) ?? 0) >= w.since) return null;
     return {
-      text: () => {
-        const tail = (this.deps.runtime.capture(pane.name) ?? "").split("\n").filter((l) => l.trim() && !/^Pane is dead/.test(l)).slice(-8);
+      text: async () => {
+        const tail = ((await this.deps.runtime.capture(pane.name)) ?? "").split("\n").filter((l) => l.trim() && !/^Pane is dead/.test(l)).slice(-8);
         const code = pane.deadStatus === null ? "" : ` (exit ${pane.deadStatus})`;
         return `exited${code} ${Math.round((now - w.since) / 1000)}s after it started, with nothing having stopped it${tail.length ? `. Its screen ended:\n${tail.map((l) => `    ${l.trimEnd()}`).join("\n")}\n` : ""}. Fix what it hit and start it again`;
       },
@@ -2268,7 +2271,7 @@ export class Fleet extends EventEmitter {
       const cwd = this.resumeCwd(rec);
       const prepared = this.resumeLaunch(rec, account, cwd, REFUSED_NOTE);
       await this.stopAndWait(rec, view);
-      this.startTmux(rec, account, cwd, REFUSED_NOTE, prepared);
+      await this.startTmux(rec, account, cwd, REFUSED_NOTE, prepared);
       this.watches.set(id, { since: this.now(), flagged: false, repaired: true, recovery });
       console.log(`agentbox: ${id}: stopped it, set its permission mode, and resumed it`);
     }).catch((e) => console.error(`agentbox: repairing ${id} failed:`, e));
@@ -2398,7 +2401,7 @@ export class Fleet extends EventEmitter {
       // answer shown it is the idle prompt it was at, under the panel.
       // A start-up dialog the fleet answers is not waiting on you either,
       // whoever says it is up: the keys go in before anything reads it so.
-      const answering = this.autoAnswer(rec, pane, adapter, now);
+      const answering = this.answering.has(rec.id);
       if (proc?.waitingOn) {
         const panel = pane && rec.provider === "claude" ? readBtwPanel(this.settledScreen(pane) ?? "") : null;
         if (panel) {
@@ -2451,7 +2454,7 @@ export class Fleet extends EventEmitter {
           if (ask) this.screenAsks.set(rec.id, ask);
           else {
             this.screenAsks.delete(rec.id);
-            if (why === "asking a question" && !f?.pendingAsk) this.deps.runtime.unsquash?.(pane.name);
+            if (why === "asking a question" && !f?.pendingAsk) void this.deps.runtime.unsquash?.(pane.name);
           }
           // A numbered menu (a safety refusal's choices, a limit dialog):
           // read it off the same screen so the Timeline can put buttons on it.
@@ -2575,14 +2578,14 @@ export class Fleet extends EventEmitter {
   }
 
   /**
-   * A pane's screen for a pass's look at it: the one captured this pass, or an
-   * older one when tmux has seen no output in the window, and no resize, since.
+   * A pane's screen for a look at it: the one the pass captured
+   * (`prefetchScreens`), or an older one when tmux has seen no output in the
+   * window, and no resize, since. Null for a pane no pass has captured at
+   * this size.
    */
   private settledScreen(pane: PaneInfo): string | null {
-    if (this.screenIsCurrent(pane)) return this.screens.get(pane.name)!.screen;
-    const screen = this.deps.runtime.capture(pane.name);
-    this.keepScreen(pane, screen, Date.now());
-    return screen;
+    const had = this.screens.get(pane.name);
+    return had && had.key === screenKey(pane) ? had.screen : null;
   }
 
   /** Captures every live pane whose screen may have moved in one tmux call: a
@@ -2610,19 +2613,31 @@ export class Fleet extends EventEmitter {
   }
 
   /**
+   * Answer the start-up dialogs of the sessions we started, before a pass
+   * builds its views: `answering` is left holding each one being handled.
+   */
+  private async answerStartUps(now: number): Promise<void> {
+    this.answering.clear();
+    for (const [id, started] of this.startedAt) {
+      if (now - started > AUTO_ANSWER_MS) continue;
+      const rec = getSessionRecord(id);
+      const pane = rec?.tmux ? this.panes.get(rec.tmux) : undefined;
+      if (rec && (await this.autoAnswer(rec, pane, this.adapters.get(rec.provider), now))) this.answering.add(id);
+    }
+  }
+
+  /**
    * Answer the start-up dialog a session we started is showing (the
    * adapter's `autoAnswer`). True while it is being handled: keys went in,
    * or went in a moment ago and the screen has not caught up.
    */
-  private autoAnswer(rec: SessionRecord, pane: PaneInfo | undefined, adapter: ProviderAdapter | undefined, now: number): boolean {
+  private async autoAnswer(rec: SessionRecord, pane: PaneInfo | undefined, adapter: ProviderAdapter | undefined, now: number): Promise<boolean> {
     if (!pane || pane.dead || !adapter?.autoAnswer) return false;
-    const started = this.startedAt.get(rec.id);
-    if (!started || now - started > AUTO_ANSWER_MS) return false;
     // With scrollback: a short pane (tmux sizes a window to its latest client)
     // scrolls a dialog's top — and any "pre-approves permissions" line — out
     // of view. Only the first minutes after a start get here, so the history
     // is this start-up's and nothing older.
-    const screen = this.deps.runtime.capture(pane.name, { scrollback: 200 });
+    const screen = await this.deps.runtime.capture(pane.name, { scrollback: 200 });
     if (!screen) return false;
     const keys = adapter.autoAnswer(screen, { bypassPermissions: getSettings().autoApprove });
     if (!keys) return false;
@@ -2638,7 +2653,7 @@ export class Fleet extends EventEmitter {
     }
     this.answered.set(rec.id, { sig, at: now, tries: prev && prev.sig === sig ? prev.tries + 1 : 1 });
     try {
-      this.deps.runtime.sendKeys(pane.name, keys);
+      await this.deps.runtime.sendKeys(pane.name, keys);
     } catch {
       return false; // the pane went away between capture and keys
     }
@@ -2661,11 +2676,8 @@ export class Fleet extends EventEmitter {
       if (now - prev.at < 1_500) return true;
     }
     this.approved.set(id, { sig, at: now, tries: prev && prev.sig === sig ? prev.tries + 1 : 1 });
-    try {
-      this.deps.runtime.sendKeys(pane, keys);
-    } catch {
-      return false; // the pane went away between capture and keys
-    }
+    // Not waited for: a pane that went away since the capture is gone on the next look.
+    void this.deps.runtime.sendKeys(pane, keys).catch(() => {});
     console.log(`agentbox: ${id} skips permissions; allowed its prompt (${what})`);
     return true;
   }
@@ -3210,7 +3222,7 @@ export class Fleet extends EventEmitter {
     // is a model too.
     const parentModel = await parentModelFor(req.provider, model ?? adapter.defaultModel?.() ?? null, effort);
     try {
-      this.deps.runtime.newSession({ name, session: id, cwd, argv: cmd.argv, stdinFile: cmd.stdinFile, ...splitSecret({ ...cmd.env, ...sessionEnv(id, req.provider, parentModel) }, cmd.secret), unset: cmd.unset });
+      await this.deps.runtime.newSession({ name, session: id, cwd, argv: cmd.argv, stdinFile: cmd.stdinFile, ...splitSecret({ ...cmd.env, ...sessionEnv(id, req.provider, parentModel) }, cmd.secret), unset: cmd.unset });
     } catch (e) {
       updateSessionRecord(id, { tmux: null });
       throw new FleetError(500, (e as Error).message);
@@ -3270,9 +3282,9 @@ export class Fleet extends EventEmitter {
   }
 
   /** Stop a tmux session, noting that we did: its session did not die in a crash. */
-  private killTmux(name: string): void {
+  private killTmux(name: string): Promise<void> {
     this.killedAt.set(name, this.now());
-    this.deps.runtime.killSession(name);
+    return this.deps.runtime.killSession(name);
   }
 
   /** Is the tmux session up right now? Asked of tmux, not the last pass. */
@@ -3304,7 +3316,7 @@ export class Fleet extends EventEmitter {
     if (view.cold) {
       await this.wake(rec, view, account, cwd, this.wakeTarget(rec, view), prompt);
     } else {
-      this.startTmux(rec, account, cwd, prompt);
+      await this.startTmux(rec, account, cwd, prompt);
     }
     await this.tick();
     return this.get(id);
@@ -3434,7 +3446,7 @@ export class Fleet extends EventEmitter {
       const ref = await adapter.findTranscript(account, rec.agentSessionId!).catch(() => null);
       if (ref) this.track(ref);
     }
-    this.startTmux({ ...rec, ...patch }, account, cwd, prompt, account.id === from.id ? fallback : prepared);
+    await this.startTmux({ ...rec, ...patch }, account, cwd, prompt, account.id === from.id ? fallback : prepared);
   }
 
   /** End the session's process in our tmux and wait until it is gone, so
@@ -3442,7 +3454,7 @@ export class Fleet extends EventEmitter {
   private async stopAndWait(rec: SessionRecord, view: Session): Promise<void> {
     const pane = rec.tmux ? this.panes.get(rec.tmux) : undefined;
     const pid = (pane ? this.processUnder(pane.pid, rec.provider)?.pid : undefined) ?? view.pid;
-    if (rec.tmux) this.killTmux(rec.tmux);
+    if (rec.tmux) await this.killTmux(rec.tmux);
     if (!pid) return;
     const start = this.now();
     let termed = false;
@@ -3578,7 +3590,7 @@ export class Fleet extends EventEmitter {
       await this.stopAndWait(rec, view);
       noteMove();
       updateSessionRecord(id, { model, modelAt: at, ...(launch ? { launch } : {}), ...moved });
-      this.startTmux(next, account, cwd, undefined, prepared);
+      await this.startTmux(next, account, cwd, undefined, prepared);
       await this.tick();
       return this.get(id);
     });
@@ -3613,7 +3625,7 @@ export class Fleet extends EventEmitter {
     return { opts, cmd, typed, inherited: launch?.env, line: fromFile ? line : "" };
   }
 
-  private startTmux(rec: SessionRecord, account: Account, cwd: string, prompt?: string, prepared?: PreparedLaunch): void {
+  private async startTmux(rec: SessionRecord, account: Account, cwd: string, prompt?: string, prepared?: PreparedLaunch): Promise<void> {
     const adapter = this.adapter(rec.provider);
     const { opts, cmd, typed, inherited, line } = prepared ?? this.resumeLaunch(rec, account, cwd, prompt);
     try {
@@ -3624,10 +3636,10 @@ export class Fleet extends EventEmitter {
     }
     const name = tmuxName(rec.id);
     // A dead pane from the last run holds the name.
-    this.killTmux(name);
+    await this.killTmux(name);
     // The account's variables win over the launching shell's.
     const env = { ...inherited, ...cmd.env, ...sessionEnv(rec.id, rec.provider, parentModelNow(rec.provider, opts.model ?? adapter.defaultModel?.() ?? null, opts.effort)) };
-    this.deps.runtime.newSession({ name, session: rec.id, cwd, argv: cmd.argv, stdinFile: cmd.stdinFile, ...splitSecret(env, cmd.secret), unset: cmd.unset });
+    await this.deps.runtime.newSession({ name, session: rec.id, cwd, argv: cmd.argv, stdinFile: cmd.stdinFile, ...splitSecret(env, cmd.secret), unset: cmd.unset });
     // The prompt is in the file the launch names, and the session reads it:
     // what it was told about the PRs it lost has been said. A CLI the fleet
     // types is told when it is typed, and says it then.
@@ -3669,7 +3681,7 @@ export class Fleet extends EventEmitter {
     let still = 0;
     while (this.now() < deadline) {
       if (!(await this.paneAlive(pane))) throw new Error("its pane exited before the prompt could be typed");
-      const screen = this.deps.runtime.capture(pane, { scrollback: 200 }) ?? "";
+      const screen = (await this.deps.runtime.capture(pane, { scrollback: 200 })) ?? "";
       const dialog = adapter?.autoAnswer?.(screen, { bypassPermissions: getSettings().autoApprove });
       still = !dialog && screen.trim() && screen === last ? still + 1 : 0;
       if (still >= 2) return;
@@ -3724,7 +3736,7 @@ export class Fleet extends EventEmitter {
     // Let the CLI's own exit bookkeeping (session files, locks) settle.
     await Bun.sleep(500);
     updateSessionRecord(id, { launch });
-    this.startTmux({ ...rec, launch }, account, cwd, undefined, prepared);
+    await this.startTmux({ ...rec, launch }, account, cwd, undefined, prepared);
     await this.tick();
     return this.get(id);
   }
@@ -3861,17 +3873,17 @@ export class Fleet extends EventEmitter {
    * queued, and a blind resend would queue it twice.
    */
   private async deliverDevinQueue(pane: string): Promise<void> {
-    const queued = (): number => devinQueuedCount(this.deps.runtime.capture(pane) ?? "");
+    const queued = async (): Promise<number> => devinQueuedCount((await this.deps.runtime.capture(pane)) ?? "");
     for (let i = 0; i < 6; i++) {
       await Bun.sleep(500);
-      if (queued() > 0) break;
+      if ((await queued()) > 0) break;
       if (i === 5) return; // no footer: idle, the message went straight through
     }
     for (let i = 0; i < 2; i++) {
-      this.deps.runtime.sendKeys(pane, ["Enter"]);
+      await this.deps.runtime.sendKeys(pane, ["Enter"]);
       for (let j = 0; j < 12; j++) {
         await Bun.sleep(250);
-        if (queued() === 0) return;
+        if ((await queued()) === 0) return;
       }
     }
     throw new FleetError(
@@ -3881,18 +3893,18 @@ export class Fleet extends EventEmitter {
   }
 
   /** What the session's terminal shows now, as plain text. */
-  screen(id: string): string {
+  async screen(id: string): Promise<string> {
     const s = this.get(id);
     if (s.host === "subagent") throw this.callersAgent(s);
     if (s.host !== "tmux" || !s.tmux) throw new FleetError(409, s.host === "external" ? "running in another terminal; its screen is not ours to read" : "not running");
-    return this.deps.runtime.capture(s.tmux) ?? "";
+    return (await this.deps.runtime.capture(s.tmux)) ?? "";
   }
 
-  keys(id: string, keys: string[]): void {
+  async keys(id: string, keys: string[]): Promise<void> {
     this.touched.set(id, this.now());
     const s = this.get(id);
     if (s.host !== "tmux" || !s.tmux) throw new FleetError(409, "not running in agentbox");
-    this.deps.runtime.sendKeys(s.tmux, keys);
+    await this.deps.runtime.sendKeys(s.tmux, keys);
   }
 
   /**
@@ -3902,7 +3914,7 @@ export class Fleet extends EventEmitter {
    * where it was written. Null when the box did not get it back.
    */
   async interrupt(id: string, takeBack = false): Promise<string | null> {
-    this.keys(id, ["Escape"]);
+    await this.keys(id, ["Escape"]);
     const s = this.get(id);
     const said = this.typed.get(id);
     const rw = this.adapter(s.provider).rewind;
@@ -3915,18 +3927,18 @@ export class Fleet extends EventEmitter {
       return head.length >= Math.min(6, flat(said).length) && flat(said).startsWith(head.slice(0, 24));
     };
     // It comes back as soon as Claude has stopped, well inside this.
-    let screen = rt.capture(pane) ?? "";
+    let screen = (await rt.capture(pane)) ?? "";
     for (let t = 0; !holds(screen); t += 100) {
       if (t >= 1_500) return null;
       await Bun.sleep(100);
-      screen = rt.capture(pane) ?? "";
+      screen = (await rt.capture(pane)) ?? "";
     }
     // Ctrl-C empties a box with text in it, in one key.
-    rt.sendKeys(pane, ["C-c"]);
+    await rt.sendKeys(pane, ["C-c"]);
     for (let t = 0; !rw.inputEmpty(screen); t += 100) {
       if (t >= 1_500) throw new FleetError(409, "stopped, but the message would not clear from its input box; the Terminal tab shows it");
       await Bun.sleep(100);
-      screen = rt.capture(pane) ?? "";
+      screen = (await rt.capture(pane)) ?? "";
     }
     this.typed.delete(id);
     return said;
@@ -3950,12 +3962,12 @@ export class Fleet extends EventEmitter {
 
       const pane = s.tmux;
       const rt = this.deps.runtime;
-      let screen = rt.capture(pane) ?? "";
+      let screen = (await rt.capture(pane)) ?? "";
       // A window squeezed short by a small terminal is read grown, and a lead
       // squeezed beside its teammates' panes zoomed, once it has redrawn at
       // the new size.
-      const grown = rt.setRoomy?.(pane, true) ?? false;
-      const zoomed = rt.setZoom?.(pane, true) ?? false;
+      const grown = (await rt.setRoomy?.(pane, true)) ?? false;
+      const zoomed = (await rt.setZoom?.(pane, true)) ?? false;
       if (grown || zoomed) screen = await this.settled(pane, screen);
       try {
         const visited = new Set<number>();
@@ -3967,17 +3979,17 @@ export class Fleet extends EventEmitter {
             return;
           }
           if ("error" in next) throw new FleetError(409, next.error);
-          if ("type" in next) rt.sendKeys(pane, ["-l", "--", next.type]);
+          if ("type" in next) await rt.sendKeys(pane, ["-l", "--", next.type]);
           else {
-            rt.sendKeys(pane, next.keys);
+            await rt.sendKeys(pane, next.keys);
             if (next.commits !== undefined) visited.add(next.commits);
           }
           screen = await this.settled(pane, screen);
         }
         throw new FleetError(409, "the dialog did not end up answered; the Terminal tab shows where it stopped");
       } finally {
-        if (zoomed) rt.setZoom?.(pane, false);
-        if (grown) rt.setRoomy?.(pane, false);
+        if (zoomed) await rt.setZoom?.(pane, false);
+        if (grown) await rt.setRoomy?.(pane, false);
       }
     });
   }
@@ -4082,7 +4094,7 @@ export class Fleet extends EventEmitter {
       settings: getSettings().balancer,
       why: `fork of ${id}, on its account`,
     });
-    this.startTmux(getSessionRecord(newId)!, account, cwd, undefined, prepared);
+    await this.startTmux(getSessionRecord(newId)!, account, cwd, undefined, prepared);
     await this.tick();
     const pane = tmuxName(newId);
     await this.serial(newId, async () => {
@@ -4132,14 +4144,14 @@ export class Fleet extends EventEmitter {
    *  in the input box. Leaves no dialog of its own up when it fails. */
   private async rewindIn(pane: string, rw: NonNullable<ProviderAdapter["rewind"]>, goal: RewindGoal): Promise<void> {
     const rt = this.deps.runtime;
-    let screen = rt.capture(pane) ?? "";
-    const grown = rt.setRoomy?.(pane, true) ?? false;
-    const zoomed = rt.setZoom?.(pane, true) ?? false;
+    let screen = (await rt.capture(pane)) ?? "";
+    const grown = (await rt.setRoomy?.(pane, true)) ?? false;
+    const zoomed = (await rt.setZoom?.(pane, true)) ?? false;
     if (grown || zoomed) screen = await this.settled(pane, screen);
     // One key at a time: two Escapes in one write read as Alt+Escape.
     const press = async (keys: string[]) => {
       for (const k of keys) {
-        rt.sendKeys(pane, [k]);
+        await rt.sendKeys(pane, [k]);
         await Bun.sleep(120);
       }
       screen = await this.settled(pane, screen);
@@ -4161,15 +4173,15 @@ export class Fleet extends EventEmitter {
       // typed after it.
       for (let t = 0; rw.inputEmpty(screen) && t < 3_000; t += 100) {
         await Bun.sleep(100);
-        screen = rt.capture(pane) ?? "";
+        screen = (await rt.capture(pane)) ?? "";
       }
       for (let i = 0; !rw.inputEmpty(screen); i++) {
         if (i === 3) throw new FleetError(409, "went back, but the old message would not clear from the input box; the Terminal tab shows where it stopped");
         await press(rw.isOpen(screen) ? ["Escape"] : ["Escape", "Escape"]);
       }
     } finally {
-      if (zoomed) rt.setZoom?.(pane, false);
-      if (grown) rt.setRoomy?.(pane, false);
+      if (zoomed) await rt.setZoom?.(pane, false);
+      if (grown) await rt.setRoomy?.(pane, false);
     }
   }
 
@@ -4280,9 +4292,9 @@ export class Fleet extends EventEmitter {
    *  so that what is typed next reaches the input box: Esc is its "stop and
    *  wait", and a message typed over it would pick one of its options. */
   private async clearLimitDialog(provider: ProviderId, pane: string): Promise<void> {
-    const before = this.deps.runtime.capture(pane) ?? "";
+    const before = (await this.deps.runtime.capture(pane)) ?? "";
     if (this.adapter(provider).blockedOn?.(before) !== LIMIT_DIALOG) return;
-    this.deps.runtime.sendKeys(pane, ["Escape"]);
+    await this.deps.runtime.sendKeys(pane, ["Escape"]);
     await this.settled(pane, before);
   }
 
@@ -4296,7 +4308,7 @@ export class Fleet extends EventEmitter {
     let screen = before;
     for (let t = 0; t < 2_000; t += 50) {
       await Bun.sleep(50);
-      screen = this.deps.runtime.capture(pane) ?? "";
+      screen = (await this.deps.runtime.capture(pane)) ?? "";
       const now = still(screen);
       if (now !== from && now === last) return screen;
       last = now;
@@ -4311,14 +4323,14 @@ export class Fleet extends EventEmitter {
     this.touched.set(id, this.now());
     // Stopped by you, so shown as stopped rather than as waiting on you.
     updateSessionRecord(id, { parkedAt: null, parkedMates: null, parkedWhy: null });
-    if (s.host === "tmux" && s.tmux) this.killTmux(s.tmux);
+    if (s.host === "tmux" && s.tmux) await this.killTmux(s.tmux);
     else if (s.host === "external" && s.pid) {
       try {
         process.kill(s.pid, "SIGTERM");
       } catch {
         /* gone */
       }
-    } else if (s.tmux) this.killTmux(s.tmux);
+    } else if (s.tmux) await this.killTmux(s.tmux);
     await this.tick();
   }
 
@@ -4370,14 +4382,14 @@ export class Fleet extends EventEmitter {
       if (s.host === "subagent") continue;
       this.touched.set(sid, this.now());
       stopDevServer(sid);
-      if (s.host === "tmux" && s.tmux) this.killTmux(s.tmux);
+      if (s.host === "tmux" && s.tmux) await this.killTmux(s.tmux);
       else if (s.host === "external" && s.pid) {
         try {
           process.kill(s.pid, "SIGTERM");
         } catch {
           /* gone */
         }
-      } else if (s.tmux) this.killTmux(s.tmux);
+      } else if (s.tmux) await this.killTmux(s.tmux);
     }
     // Its jobs: those of a session that has handed over to one still open
     // (`heir`) are the successor's now, and stay.
