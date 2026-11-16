@@ -8,7 +8,7 @@
  * mock is a dynamic import, so it costs a production bundle nothing.
  */
 
-import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
+import { useCallback, useEffect, useRef, useState, useSyncExternalStore } from "react";
 import type {
   Btw,
   OrgReadEvent,
@@ -703,75 +703,85 @@ const carried: Carried | null = (() => {
   }
 })();
 
-let latest: { hot: HotState; cold: ColdState } | null = null;
+/**
+ * The board, one copy for the page: every component reads the same one, kept
+ * by the socket's frames. A copy per component fetched the whole board again
+ * each time one mounted (opening a session did) and applied every frame once
+ * for each.
+ */
+let hot: HotState | null = carried?.hot ?? null;
+let cold: ColdState | null = carried?.cold ?? null;
+let appState: AppState | null = hot && cold ? { ...cold, ...hot } : null;
+const appStateListeners = new Set<() => void>();
+
+function setAppState(nextHot: HotState | null, nextCold: ColdState | null): void {
+  if (nextHot === hot && nextCold === cold) return;
+  hot = nextHot;
+  cold = nextCold;
+  appState = hot && cold ? { ...cold, ...hot } : null;
+  for (const l of appStateListeners) l();
+}
+
 if (!MOCK && typeof window !== "undefined") {
   window.addEventListener("pagehide", () => {
-    if (!latest) return;
+    if (!hot || !cold) return;
     try {
-      sessionStorage.setItem(CARRY_KEY, JSON.stringify({ at: Date.now(), ...latest } satisfies Carried));
+      sessionStorage.setItem(CARRY_KEY, JSON.stringify({ at: Date.now(), hot, cold } satisfies Carried));
     } catch {
       /* over the storage quota: the next load waits on the server, as it always did. */
     }
   });
 }
 
-export function useAppState(): { state: AppState | null; connected: boolean } {
-  const [hot, setHot] = useState<HotState | null>(carried?.hot ?? null);
-  const [cold, setCold] = useState<ColdState | null>(carried?.cold ?? null);
-  const { connected } = useConnection();
+let following = false;
 
-  useEffect(() => {
-    latest = hot && cold ? { hot, cold } : null;
-  }, [hot, cold]);
-
-  useEffect(
-    () =>
-      wire.onMessage((msg) => {
-        if (msg.type === "hot") setHot(msg.state);
-        else if (msg.type === "hotDelta") setHot((prev) => (prev ? applyHotDelta(prev, msg) : prev));
-        else if (msg.type === "cold") setCold(msg.state);
-        else if (msg.type === "coldDelta") setCold((prev) => (prev ? { ...prev, ...msg.state } : prev));
-      }),
-    [],
-  );
-
+/** Start keeping the board, when the first component asks for it. */
+function followAppState(): void {
+  if (following) return;
+  following = true;
+  wire.onMessage((msg) => {
+    if (msg.type === "hot") setAppState(msg.state, cold);
+    else if (msg.type === "hotDelta") setAppState(hot ? applyHotDelta(hot, msg) : hot, cold);
+    else if (msg.type === "cold") setAppState(hot, msg.state);
+    else if (msg.type === "coldDelta") setAppState(hot, cold ? { ...cold, ...msg.state } : cold);
+  });
   // Seed over HTTP so a first paint does not wait on the socket handshake. It
   // replaces a carried snapshot, but never a frame the socket already sent.
-  useEffect(() => {
-    let cancelled = false;
-    api.state().then(
-      (s) => {
-        if (cancelled) return;
-        setHot((prev) => (prev && prev !== carried?.hot ? prev : { sessions: s.sessions, serverTime: s.serverTime, closedStamp: s.closedStamp }));
-        setCold(
-          (prev) =>
-            prev && prev !== carried?.cold ? prev : {
-              accounts: s.accounts,
-              logins: s.logins,
-              repos: s.repos,
-              prs: s.prs,
-              prClaims: s.prClaims,
-              skills: s.skills,
-              settings: s.settings,
-              providers: s.providers,
-              warnings: s.warnings,
-              schedules: s.schedules,
-              cards: s.cards,
-              onboarding: s.onboarding,
-              org: s.org,
-            },
-        );
-      },
-      () => {
-        /* the socket's status is the UI's signal; no second alarm here. */
-      },
-    );
-    return () => {
-      cancelled = true;
-    };
-  }, []);
+  api.state().then(
+    (s) =>
+      setAppState(
+        hot && hot !== carried?.hot ? hot : { sessions: s.sessions, serverTime: s.serverTime, closedStamp: s.closedStamp },
+        cold && cold !== carried?.cold ? cold : {
+          accounts: s.accounts,
+          logins: s.logins,
+          repos: s.repos,
+          prs: s.prs,
+          prClaims: s.prClaims,
+          skills: s.skills,
+          settings: s.settings,
+          providers: s.providers,
+          warnings: s.warnings,
+          schedules: s.schedules,
+          cards: s.cards,
+          onboarding: s.onboarding,
+          org: s.org,
+        },
+      ),
+    () => {
+      /* the socket's status is the UI's signal; no second alarm here. */
+    },
+  );
+}
 
-  const state = useMemo(() => (hot && cold ? { ...cold, ...hot } : null), [hot, cold]);
+function subscribeAppState(listener: () => void): () => void {
+  followAppState();
+  appStateListeners.add(listener);
+  return () => appStateListeners.delete(listener);
+}
+
+export function useAppState(): { state: AppState | null; connected: boolean } {
+  const state = useSyncExternalStore(subscribeAppState, () => appState);
+  const { connected } = useConnection();
   return { state, connected };
 }
 
