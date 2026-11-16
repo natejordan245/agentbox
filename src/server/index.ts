@@ -2078,12 +2078,13 @@ function startupProgress(): { read: number; of: number } {
 function welcome(ws: Socket): void {
   if (ws.readyState !== WebSocket.OPEN) return;
   clients.add(ws);
+  // First: it is small, and a box a phone reopens shows its draft before the board is read.
+  send(ws, { type: "drafts", drafts: listDrafts() });
   send(ws, { type: "hot", state: hotState(true) });
   send(ws, { type: "cold", state: coldState() });
   send(ws, { type: "metrics", state: metricsSnapshot() });
   send(ws, { type: "build", entry: uiBuild });
   send(ws, { type: "behind", behind: serverBehind });
-  send(ws, { type: "drafts", drafts: listDrafts() });
   setMetricsWatchers(clients.size);
   // A watch sent while it waited.
   if (ws.data.kind === "app" && ws.data.watching) {
