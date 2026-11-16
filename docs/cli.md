@@ -21,7 +21,6 @@ also reads them from stdin with `-`, so pipes and xargs work.
     agentbox grep <regex> [-i] [--all]   # text, thinking, tool calls and tool output: id time who line
     agentbox screen <id>            # what its terminal shows right now (tmux sessions)
     agentbox diff <id>              # its worktree's changes
-    agentbox usage                  # each account's limits
     agentbox watch [<id>...] [--status blocked,waiting,running,stopped] [--once] [--now]
                                     # runs until killed, or until the agent that armed
                                     # it exits: a line each time one starts
@@ -153,7 +152,9 @@ why). Arming the same wait twice is one wait.
                                     # without it they cannot approve in one gesture.
                                     # --long-file is only the evidence behind that, in
                                     # Markdown: do not repeat the card there.
-                                    # --key adds it once, however often you run it
+                                    # --key adds it once, however often you run it.
+                                    # Refused while the Review extension is off:
+                                    # then ask in your own conversation
     agentbox card list [--open|--later|--answered [--unread]|--closed] [--json]
     agentbox card show <id>         # all of it, with the answer
     agentbox card ack <id>          # you have read an answer that was waiting (--unread)
@@ -215,7 +216,10 @@ your user for a fresh 6-digit MFA code, saying what it is for, then:
   do not work it as well. To start a session on a PR, start it with
   `--claim <n>` (`agentbox claude --detach --claim 8653 '…'`): it has the
   PR from its first moment, or is not started. Reading or reviewing a PR
-  needs no claim. A claim lapses when its session stops or closes. Your own
+  needs no claim. To have another session help with your PR, start it with
+  `--into <your PR>` (`agentbox claude --detach --into 8653 '…'`): it
+  works on your branch, pushes there and opens no PR of its own, so one area
+  stays one PR. A claim lapses when its session stops or closes. Your own
   id is `$AGENTBOX_SESSION`; wherever ls, show, pr who and pr claims name
   you, the id has "(you)" after it.
 
@@ -251,11 +255,12 @@ your user for a fresh 6-digit MFA code, saying what it is for, then:
   started in the background stops the same way, taking its work with it:
   start it with `agentbox wait job`. Say what you are waiting on only after
   the wait is armed.
-- A `send` to a session that is stopped, or whose prompt cache is cold, is
-  refused: it would re-read its whole context to hear you. Read it with
-  `show` and `log`, or start a fresh session with a handoff; pass `--wake`
-  only when waking it is the point (an answer it asked for, a blocker). More
-  than 3 messages to one session in an hour are refused too: batch them.
+- A `send` to a session that is parked, stopped, or whose prompt cache is
+  cold, is refused, since it would re-read its whole context to hear you, and
+  the refusal shows its last turns. If it is waiting on what you are sending
+  (it asked you for it, its STATUS says it is waiting on you or your work, a
+  blocker only it can clear), send it again with `--wake`; if not, drop it.
+  More than 3 messages to one session in an hour are refused too: batch them.
 - A `send` to a session another has taken over (a schedule replaced it)
   goes to the one that took over, and says so: send to that one from then on.
 - `send` prints `sent: <id> took it` and exits 0 only when the session

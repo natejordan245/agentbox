@@ -8,13 +8,12 @@
  * cache has gone cold (`Session.cacheWarmUntil`, cache.ts) makes it read its
  * whole context again at full price to hear one line (parked is fine where the
  * cache outlives the process, `ProviderAdapter.parkIdleMs`). That is refused unless
- * the sender says waking it is the point (`wake`), or the session started the
- * sender and is parked or cold, not stopped or closed: that is the report it
- * started the sender for. On 11-15 7fah3u6y parked "waiting on a message from
- * helper qjj23vb8"; the helper's "green and clean" was refused for waking it,
- * the helper read that as "do not", and the lead sat twelve hours on work that
- * was done. Of the 121 sender→reader pairs refused in the transcripts by then,
- * 27 were a child writing to its own parent.
+ * the sender says waking it is the point (`wake`), and the refusal shows the
+ * session's last turns so the sender can tell: send again with `wake` when it
+ * is waiting on this, drop it when not. On 11-15 7fah3u6y parked "waiting on
+ * a message from helper qjj23vb8"; the helper's "green and clean" was refused
+ * with nothing to show that, the helper took the refusal as "do not", and the
+ * lead sat twelve hours on work that was done.
  *
  * Chatter: more than `CHATTER_MAX` messages from one session to another in
  * `CHATTER_WINDOW_MS`. Each one interrupts the reader and stays in its
@@ -30,11 +29,15 @@
 
 import type { Fleet } from "./fleet";
 import { adapterFor } from "./providers";
-import { agentSentMark } from "./sent";
+import { agentSentMark, readSent } from "./sent";
+import { messageTail } from "./turnstatus";
 import type { Session } from "./types";
 
 const CHATTER_MAX = 3;
 const CHATTER_WINDOW_MS = 60 * 60_000;
+/** How many of its last turns a wake refusal shows, and how many events back it looks for them. */
+const TURNS_SHOWN = 3;
+const TURNS_READ = 300;
 
 /** `312k`, `8k`: a context size as the board says it. */
 const size = (tokens: number | null): string => (tokens ? `${Math.max(1, Math.round(tokens / 1000))}k tokens` : "an unknown amount");
@@ -44,32 +47,52 @@ function span(ms: number): string {
   return m < 60 ? `${m}m` : m < 48 * 60 ? `${Math.floor(m / 60)}h ${m % 60}m` : `${Math.round(m / 1440)}d`;
 }
 
-/**
- * Why an agent's message to `s` would wake it, or null when it would not:
- * it runs and its cache is warm, or it is mid-turn (the message joins a turn
- * that is paying for the context anyway), or it started the sender
- * (`askedFor`) and is only parked or cold, not stopped or closed.
- */
-function wakeRefusal(s: Session, now: number, askedFor: boolean): string | null {
+const oneLine = (t: string, max: number): string => {
+  const flat = t.replace(/\s+/g, " ").trim();
+  return flat.length > max ? `${flat.slice(0, max)}…` : flat;
+};
+
+/** Why an agent's message would wake `s` ("was parked for sitting idle"), or
+ *  null when it would not: it runs and its cache is warm, or it is mid-turn
+ *  (the message joins a turn that is paying for the context anyway). */
+function wakes(s: Session, now: number): string | null {
   const asleep = s.host === "none";
   // Parked, but its cache outlives the process: a resume reads it back warm.
   const warmResume = asleep && s.status === "waiting" && !!adapterFor(s.provider).parkIdleMs;
   const cold = s.cold || now > s.cacheWarmUntil;
   if ((!asleep || warmResume) && (!cold || s.status === "running" || s.status === "blocked")) return null;
-  if (askedFor && s.status !== "stopped" && s.status !== "closed") return null;
-  const state = asleep
-    ? s.status === "closed"
-      ? "is closed"
-      : s.status === "stopped"
-        ? "is stopped"
-        : "was parked for sitting idle"
-    : `has a cold prompt cache (it ran out ${span(now - s.cacheWarmUntil)} ago)`;
-  return (
-    `not sent: ${s.id} ${state} and holds ${size(s.contextUsed)} of context, so a message ${asleep ? "resumes" : "wakes"} it and it re-reads all of that at full price. ` +
-    `Read it instead: \`agentbox show ${s.id}\`, \`agentbox log ${s.id} | tail -60\`. ` +
-    `If its work must go on, start a fresh session with a handoff that points at that log. ` +
-    `Send again with --wake only when waking it is the point: the answer to a question it asked, or a blocker only it can clear.`
-  );
+  if (!asleep) return `has a cold prompt cache (it ran out ${span(now - s.cacheWarmUntil)} ago)`;
+  return s.status === "closed" ? "is closed" : s.status === "stopped" ? "is stopped" : "was parked for sitting idle";
+}
+
+/** `s`'s last few turns, oldest first: who prompted each and how it ended
+ *  (its STATUS line, when it has one), for a sender deciding whether `s` is
+ *  waiting on what it would say. */
+async function lastTurns(fleet: Pick<Fleet, "timeline">, id: string, from: string | null, now: number): Promise<string> {
+  const { events } = await fleet.timeline(id, null, TURNS_READ);
+  const turns: string[] = [];
+  let reply: string | null = null;
+  for (let i = events.length - 1; i >= 0 && turns.length < TURNS_SHOWN; i--) {
+    const e = events[i]!;
+    if (e.kind === "assistant" && reply === null && e.text.trim()) reply = e.text;
+    if (e.kind !== "user") continue;
+    const said = readSent(e.text);
+    const who = !said.agent ? "the user" : said.from === from && from ? `${from} (you)` : (said.from ?? "an agent");
+    turns.unshift(`- ${span(now - e.at)} ago, ${who}: "${oneLine(said.text, 240)}"\n  It ended: ${reply === null ? "(no reply)" : oneLine(messageTail(reply), 400)}`);
+    reply = null;
+  }
+  return turns.join("\n");
+}
+
+/** The refusal for a message that would wake `s`, which `state` says why:
+ *  what waking costs, its last turns, and the sender's two ways on. */
+async function wakeRefusal(fleet: Pick<Fleet, "timeline">, s: Session, state: string, from: string | null, now: number): Promise<string> {
+  const turns = await lastTurns(fleet, s.id, from, now).catch(() => "");
+  return [
+    `not sent: ${s.id} ${state} and holds ${size(s.contextUsed)} of context; delivering this ${s.host === "none" ? "resumes" : "wakes"} it, and it re-reads all of that at full price.`,
+    `If it is waiting on what you are sending (it asked you for it, its last STATUS says it is waiting on you or your work, or it is a blocker only it can clear), send it again with --wake. If not (it handed the work off and asked for nothing back, or this is news it can do without), drop it.`,
+    turns ? `Its last turns, oldest first (more: \`agentbox log ${s.id}\`):\n${turns}` : `Its conversation could not be read here: \`agentbox log ${s.id} | tail -60\`.`,
+  ].join("\n\n");
 }
 
 /**
@@ -120,33 +143,21 @@ function countSend(from: string | null, to: string, now: number): void {
   sent.set(pair(from, to), [...recent(pair(from, to), now), now]);
 }
 
-/** `from` was started by `to` (not grouped under it by hand): what it says
- *  there is the report `to` started it for, so waking `to` is the point. A
- *  sender from another machine is never a local session's child. */
-function startedBy(fleet: Pick<Fleet, "get">, from: string | null, to: string): boolean {
-  if (!from) return false;
-  try {
-    const s = fleet.get(from);
-    return s.parent === to && !s.parentByHand;
-  } catch {
-    return false;
-  }
-}
-
 /**
  * Where an agent's message to `id` goes (`to`: `id`, or whoever took over
  * from it) and why it may not, before anything is typed: the one check for
  * an agent's `agentbox send`.
  */
-function agentRefusal(
-  fleet: Pick<Fleet, "get" | "heir">,
+async function agentRefusal(
+  fleet: Pick<Fleet, "get" | "heir" | "timeline">,
   id: string,
   opts: { from: string | null; wake: boolean },
   now: number,
-): { meant: string; to: string; refusal: string | null } {
+): Promise<{ meant: string; to: string; refusal: string | null }> {
   const meant = fleet.get(id).id;
   const to = fleet.get(fleet.heir(meant));
-  const refusal = limitRefusal(to, now) ?? (opts.wake ? null : wakeRefusal(to, now, startedBy(fleet, opts.from, meant))) ?? chatterRefusal(opts.from, to.id, now);
+  const asleep = opts.wake ? null : wakes(to, now);
+  const refusal = limitRefusal(to, now) ?? (asleep && (await wakeRefusal(fleet, to, asleep, opts.from, now))) ?? chatterRefusal(opts.from, to.id, now);
   return { meant, to: to.id, refusal: refusal && (to.id === meant ? refusal : `${meant} has been taken over by ${to.id}. ${refusal}`) };
 }
 
@@ -157,13 +168,13 @@ function agentRefusal(
  * point, and a stopped one is resumed with the message.
  */
 export async function sendAsAgent(
-  fleet: Pick<Fleet, "get" | "heir" | "send">,
+  fleet: Pick<Fleet, "get" | "heir" | "send" | "timeline">,
   id: string,
   text: string,
   opts: { from: string | null; wake: boolean },
   now: number,
 ): Promise<{ to: string } | { refused: string }> {
-  const { meant, to: toId, refusal } = agentRefusal(fleet, id, opts, now);
+  const { meant, to: toId, refusal } = await agentRefusal(fleet, id, opts, now);
   if (refusal) return { refused: refusal };
   const to = { id: toId };
   const told = to.id === meant ? "" : `[sent to ${meant}, which you took over from] `;

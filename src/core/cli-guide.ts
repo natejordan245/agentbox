@@ -255,11 +255,12 @@ your user for a fresh 6-digit MFA code, saying what it is for, then:
   started in the background stops the same way, taking its work with it:
   start it with \`agentbox wait job\`. Say what you are waiting on only after
   the wait is armed.
-- A \`send\` to a session that is stopped, or whose prompt cache is cold, is
-  refused: it would re-read its whole context to hear you. Read it with
-  \`show\` and \`log\`, or start a fresh session with a handoff; pass \`--wake\`
-  only when waking it is the point (an answer it asked for, a blocker). More
-  than 3 messages to one session in an hour are refused too: batch them.
+- A \`send\` to a session that is parked, stopped, or whose prompt cache is
+  cold, is refused, since it would re-read its whole context to hear you, and
+  the refusal shows its last turns. If it is waiting on what you are sending
+  (it asked you for it, its STATUS says it is waiting on you or your work, a
+  blocker only it can clear), send it again with \`--wake\`; if not, drop it.
+  More than 3 messages to one session in an hour are refused too: batch them.
 - A \`send\` to a session another has taken over (a schedule replaced it)
   goes to the one that took over, and says so: send to that one from then on.
 - \`send\` prints \`sent: <id> took it\` and exits 0 only when the session
