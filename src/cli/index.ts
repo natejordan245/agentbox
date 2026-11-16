@@ -172,7 +172,7 @@ async function startSession(provider: ProviderId, args: string[]): Promise<numbe
   let accountId: string | null = null;
   const wanted = flags.get("account");
   if (typeof wanted === "string") {
-    const state = await api<AppState>("GET", "/api/state");
+    const state = await api<AppState>("GET", "/api/state?open=1");
     const holder = accountProvider(provider);
     const match = state.accounts.find(
       (a) => a.provider === holder && (a.id === wanted || a.label === wanted || a.email === wanted),
@@ -189,7 +189,7 @@ async function startSession(provider: ProviderId, args: string[]): Promise<numbe
   // --branch B: the worktree of existing branch B, as the app's branch pick.
   let place: { repoId?: string; worktree: true; branch?: string } | null = null;
   if (flags.has("worktree") || str("branch")) {
-    const repoId = str("repo") ? undefined : repoOfDir((await api<AppState>("GET", "/api/state")).repos, process.cwd());
+    const repoId = str("repo") ? undefined : repoOfDir((await api<AppState>("GET", "/api/state?open=1")).repos, process.cwd());
     if (repoId === null) {
       console.error("agentbox: --worktree needs a registered repo here: run it inside one, name one with --repo, or add it in Settings");
       return 2;
@@ -256,7 +256,7 @@ function printPlacement(p: Placement): void {
 
 async function usage(): Promise<number> {
   await ensureServer();
-  const state = await api<AppState>("GET", "/api/state");
+  const state = await api<AppState>("GET", "/api/state?open=1");
   for (const a of state.accounts) {
     const windows = a.usage.windows
       .map((w) => `${w.label} ${Math.round(w.usedPct)}%`)

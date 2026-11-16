@@ -87,7 +87,7 @@ export async function orgCommand(api: Api, ensureServer: () => Promise<void>, ar
       for (const id of ids) {
         try {
           // A session, or else a schedule: the sessions it starts from now on.
-          const state = await api<AppState>("GET", "/api/state");
+          const state = await api<AppState>("GET", "/api/state?open=1");
           const path = state.schedules.some((sc) => sc.id === id) ? "schedules" : "sessions";
           await api("PATCH", `/api/${path}/${encodeURIComponent(id)}`, { scope });
           console.log(`${id}: ${scope}`);
@@ -124,7 +124,7 @@ export async function orgCommand(api: Api, ensureServer: () => Promise<void>, ar
       await ensureServer();
       const want = words[0];
       if (!want) throw new Error(`org ${verb} <account>`);
-      const state = await api<AppState>("GET", "/api/state");
+      const state = await api<AppState>("GET", "/api/state?open=1");
       const match = state.accounts.filter((a) => a.id === want || a.label === want || a.email === want);
       if (match.length !== 1) throw new Error(match.length ? `${want} is ${match.length} accounts here: name it by id` : `no account ${want}`);
       const a = match[0]!;

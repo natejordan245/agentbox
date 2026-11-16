@@ -1,7 +1,7 @@
 /** Who has which pull request, from the CLI (src/core/prclaims.ts). */
 
 import type { Api } from "../client";
-import type { AppState, PrClaim } from "../core/types";
+import type { PrClaim, Session } from "../core/types";
 import { idYou, me, parseArgs } from "./sessions";
 
 const str = (v: string | true | undefined): string | undefined => (typeof v === "string" ? v : undefined);
@@ -49,7 +49,7 @@ export async function pr(api: Api, args: string[]): Promise<number> {
       if (flags.has("json")) console.log(JSON.stringify(w.claim ? { ...w, claim: { ...w.claim, you: w.claim.sessionId === you } } : w));
       else if (!w.claim) console.log(`${w.repo}#${w.number}  nobody`);
       else {
-        const s = (await api<AppState>("GET", "/api/state")).sessions.find((x) => x.id === w.claim!.sessionId);
+        const s = await api<Session>("GET", `/api/sessions/${encodeURIComponent(w.claim.sessionId)}`).catch(() => null);
         console.log(`${w.repo}#${w.number}  ${idYou(w.claim.sessionId, you)}  ${HOW[w.claim.how]}  ${s?.status ?? "?"}  ${s?.label ?? s?.title ?? ""}`);
       }
       if (!flags.has("json") && w.helpers.length) console.log(`  helped by ${w.helpers.map((h) => idYou(h, you)).join(", ")} (started --into it)`);

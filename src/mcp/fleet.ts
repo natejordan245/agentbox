@@ -103,7 +103,7 @@ export async function runMcp(base: string): Promise<void> {
       inputSchema: { include_stopped: z.boolean().optional().describe("Include sessions with no running process (default: only those active in the last 24h)") },
     },
     async ({ include_stopped }) => {
-      const state = await api<AppState>("GET", "/api/state");
+      const state = await api<AppState>("GET", "/api/state?open=1");
       const now = Date.now();
       const labels = new Map(state.accounts.map((a) => [a.id, a.label]));
       const sessions = state.sessions.filter(
@@ -176,7 +176,7 @@ export async function runMcp(base: string): Promise<void> {
     async ({ provider, cwd, prompt, account, model }) => {
       let accountId: string | null = null;
       if (account) {
-        const state = await api<AppState>("GET", "/api/state");
+        const state = await api<AppState>("GET", "/api/state?open=1");
         const match = state.accounts.find((a) => a.provider === accountProvider(provider) && (a.label === account || a.id === account || a.email === account));
         if (!match) throw new Error(`no ${provider} account "${account}"`);
         accountId = match.id;

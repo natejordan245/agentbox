@@ -1536,10 +1536,10 @@ const router = new Router(mapError)
     );
   })
   // How much of your time the fleet took, per day (src/core/yourtime.ts).
-  .add("GET", "/api/you/time", ({ url }) => {
+  .add("GET", "/api/you/time", async ({ url }) => {
     const days = Number(url.searchParams.get("days") ?? 14);
     if (!Number.isInteger(days) || days < 1 || days > 60) throw new HttpError(400, "days is a whole number from 1 to 60");
-    return json(yourTime(days, readUserIdentity().timezone));
+    return json(await yourTime(days, readUserIdentity().timezone));
   })
   .add("GET", "/api/cards/:id", ({ params }) => json(cards.get(cardId(params.id!))))
   .add("POST", "/api/cards/:id/answer", async ({ req, params }) => {

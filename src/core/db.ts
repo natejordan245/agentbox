@@ -787,13 +787,13 @@ function rowToRecord(r: Row): SessionRecord {
  * server's CPU. Frozen, so a caller that edits one fails loudly rather than
  * drifting from the table.
  */
-let recordCache: { db: Database; byId: Map<string, SessionRecord> } | null = null;
+let recordCache: { db: Database; byId: Map<string, SessionRecord>; lists: Map<number, SessionRecord[]> } | null = null;
 
 function cachedRecords(): Map<string, SessionRecord> {
   const d = getDb();
   if (recordCache?.db !== d) {
     const rows = d.query("SELECT * FROM sessions").all() as Row[];
-    recordCache = { db: d, byId: new Map(rows.map((r) => [r.id as string, Object.freeze(rowToRecord(r))])) };
+    recordCache = { db: d, byId: new Map(rows.map((r) => [r.id as string, Object.freeze(rowToRecord(r))])), lists: new Map() };
   }
   return recordCache.byId;
 }
@@ -804,6 +804,7 @@ function recacheRecord(id: string): void {
   const row = getDb().query("SELECT * FROM sessions WHERE id = ?").get(id) as Row | null;
   if (row) byId.set(id, Object.freeze(rowToRecord(row)));
   else byId.delete(id);
+  recordCache!.lists.clear();
 }
 
 export function insertSessionRecord(r: SessionRecord): void {
@@ -860,9 +861,21 @@ export function attachDiscoveredSpawn(pendingId: string, discoveredId: string, n
  *  one you pinned or bookmarked, closed or not.
  *  (`archived_at` is when it was closed: the old name for it.) */
 export function listSessionRecords(sinceMs = 0): SessionRecord[] {
-  return [...cachedRecords().values()]
-    .filter((r) => r.lastActivityAt >= sinceMs || (r.origin === "agentbox" && r.archivedAt === null) || r.pinOrder != null || r.bookmarkedAt != null)
-    .sort((a, b) => b.lastActivityAt - a.lastActivityAt);
+  const byId = cachedRecords();
+  // Kept until the next write: a pass asks for the same list several times,
+  // and filtering and sorting all of history each time was a seventh of it.
+  const lists = recordCache!.lists;
+  let list = lists.get(sinceMs);
+  if (!list) {
+    list = [...byId.values()]
+      .filter((r) => r.lastActivityAt >= sinceMs || (r.origin === "agentbox" && r.archivedAt === null) || r.pinOrder != null || r.bookmarkedAt != null)
+      .sort((a, b) => b.lastActivityAt - a.lastActivityAt);
+    // A `since` that moves with the clock is a new list each time.
+    if (lists.size >= 8) lists.clear();
+    lists.set(sinceMs, list);
+  }
+  // The caller's own: some sort theirs in place.
+  return [...list];
 }
 
 /** The ids in all of history that `ref` could mean: itself when it is one,

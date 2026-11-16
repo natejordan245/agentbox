@@ -205,15 +205,39 @@ function yourActs(since: number): YourAct[] {
   return acts;
 }
 
-/** The search index moves once a minute, and a read of two weeks takes a
- *  few hundred milliseconds of the server's thread: kept that long. */
-let kept: { key: string; at: number; time: YourTime } | null = null;
+export interface YourTimeJob {
+  days: number;
+  timezone: string;
+}
 
-export function yourTime(days: number, timezone: string, now = Date.now()): YourTime {
-  const key = `${days} ${timezone}`;
-  if (kept && kept.key === key && now - kept.at < MIN) return kept.time;
+/** The read itself: everything said in the days asked for, which is seconds
+ *  of work. `yourTime` runs it in a worker. */
+export function readYourTime({ days, timezone }: YourTimeJob, now = Date.now()): YourTime {
   // A day and a half more than asked: the oldest local day starts before `days` × 24h ago.
-  const time = foldYourTime(yourActs(now - (days + 1.5) * 24 * 60 * MIN), days, timezone, now);
+  return foldYourTime(yourActs(now - (days + 1.5) * 24 * 60 * MIN), days, timezone, now);
+}
+
+/** The search index moves once a minute: an answer is kept that long. */
+let kept: { key: string; at: number; time: Promise<YourTime> } | null = null;
+
+/** `readYourTime`, off the server's thread (`yourtime-worker.ts`): on it,
+ *  every page, terminal and CLI call waited the seconds the read takes. */
+export function yourTime(days: number, timezone: string): Promise<YourTime> {
+  const key = `${days} ${timezone}`;
+  const now = Date.now();
+  if (kept && kept.key === key && now - kept.at < MIN) return kept.time;
+  const { promise: time, resolve, reject } = Promise.withResolvers<YourTime>();
+  const worker = new Worker(new URL("./yourtime-worker.ts", import.meta.url));
+  worker.onmessage = (e: MessageEvent<YourTime>) => {
+    worker.terminate();
+    resolve(e.data);
+  };
+  worker.onerror = (e) => {
+    worker.terminate();
+    if (kept?.time === time) kept = null;
+    reject(new Error(`your time could not be read: ${e.message}`));
+  };
+  worker.postMessage({ days, timezone } satisfies YourTimeJob);
   kept = { key, at: now, time };
   return time;
 }

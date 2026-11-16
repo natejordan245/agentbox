@@ -28,7 +28,7 @@ export async function schedule(api: Api, args: string[]): Promise<number> {
   let accountId: string | null = null;
   const wanted = str(flags.get("account"));
   if (wanted) {
-    const s = await api<AppState>("GET", "/api/state");
+    const s = await api<AppState>("GET", "/api/state?open=1");
     const match = s.accounts.find((a) => a.provider === agent && (a.id === wanted || a.label === wanted || a.email === wanted));
     if (!match) throw new Error(`no ${agent} account "${wanted}"`);
     accountId = match.id;
@@ -56,7 +56,7 @@ export async function schedule(api: Api, args: string[]): Promise<number> {
 /** `agentbox schedules [--json]`: what is set to start, soonest first. */
 export async function list(api: Api, args: string[]): Promise<number> {
   const { flags } = parseArgs(args, [], ["json"]);
-  const { schedules } = await api<AppState>("GET", "/api/state");
+  const { schedules } = await api<AppState>("GET", "/api/state?open=1");
   if (flags.has("json")) console.log(JSON.stringify(schedules, null, 2));
   else if (schedules.length === 0) console.error("nothing scheduled");
   else for (const sc of schedules) console.log(line(sc));
