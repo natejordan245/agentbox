@@ -1001,7 +1001,7 @@ export class Fleet extends EventEmitter {
    * was started by an in-process teammate that has since gone idle: the lead
    * sits "waiting on CI" for good, and is parked an hour later with nothing
    * holding it. Once the session has been quiet for `strandedNudgeAfter` —
-   * 55 minutes, before it is parked — or its cache is about to go cold, it
+   * 55 minutes, or less where it is parked sooner — or its cache is about to go cold, it
    * gets one message naming what finished, and is not parked before it has
    * (`parkHold`). Once per notification — the nudge in the transcript clears
    * them, so a restart does not repeat it — and not while a teammate is
@@ -1020,7 +1020,6 @@ export class Fleet extends EventEmitter {
    * message would only meet the limit again.
    */
   private keepWarm(now: number, parkIdleMin: number): void {
-    const after = strandedNudgeAfter(parkIdleMin);
     for (const v of this.views.values()) {
       if (v.host !== "tmux" || this.busy.has(v.id)) continue;
       // "Running" too: Claude's status file says busy on a lead with teammates.
@@ -1031,6 +1030,7 @@ export class Fleet extends EventEmitter {
 
       const stranded = this.strandedOf(v);
       const newest = stranded.at(-1)?.at;
+      const after = strandedNudgeAfter(parkIdleMin && Math.min(parkIdleMin * 60_000, this.adapter(v.provider).parkIdleMs ?? Infinity));
       if (newest !== undefined && this.strandedSeen.get(v.id) !== newest && (cacheExpiring(now, v.cacheWarmUntil) || now - v.lastActivityAt >= after)) {
         // A working teammate's notification waits in the lead's queue until
         // the teammate's step yields, and is taken then.
@@ -3634,7 +3634,11 @@ export class Fleet extends EventEmitter {
     // The prompt and the briefing go in files the launch names: a command
     // line holds them, and `pgrep -f` reads command lines.
     const withLine = line ? `${line}\n\n${prompt ?? ""}` : prompt;
-    const text = sessionText(rec.id, briefing(cwd), fromFile ? withLine || undefined : undefined);
+    // A resume inside its cache's life keeps the briefing its last run read,
+    // so a rules edit since does not cost it the cache; a cold one reads the
+    // rules as they are now.
+    const warm = !forkId && this.now() <= (this.views.get(rec.id)?.cacheWarmUntil ?? 0);
+    const text = sessionText(rec.id, briefing(cwd), fromFile ? withLine || undefined : undefined, warm);
     const typed = fromFile ? undefined : prompt ?? (line ? "" : undefined);
     const opts = {
       session: forkId ?? rec.id, account, agentSessionId: rec.agentSessionId!, cwd,

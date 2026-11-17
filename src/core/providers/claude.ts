@@ -821,6 +821,15 @@ export const claudeAdapter: ProviderAdapter = {
   },
 
   reader: claudeReader,
+  // Claude's prompt cache is Anthropic's and lives an hour from the last call
+  // whatever happens to the process: on 11-16/17 every session the fleet
+  // parked and resumed inside the hour read its whole context back on the
+  // first call (33 of 33). An idle process holds ~270 MB; a resume costs a few
+  // CPU-seconds and ~8 s. Follow-ups come a median 6 minutes after a turn
+  // ends, so most cost a resume at any short wait: two minutes (three to four
+  // with the two clean checks) keeps the quarter that come within a minute or
+  // two, and costs the least CPU of any wait, an hour's included.
+  parkIdleMs: 2 * 60_000,
   subagentLogDir,
   spawnCommand,
   resumeCommand,

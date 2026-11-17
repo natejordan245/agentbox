@@ -36,11 +36,14 @@ export interface SessionText {
  *
  * One file per session, rewritten when the session is started again, so a rule
  * edited since the last launch reaches the next one without a restart of the
- * server.
+ * server. Not on a resume that keeps the briefing it has (`keepBriefing`): the
+ * briefing is part of the system prompt, and one edited since would make the
+ * resume rewrite the whole prompt cache it is counting on reading back.
  */
-export function sessionText(sessionId: string, briefing: string, prompt?: string): SessionText {
+export function sessionText(sessionId: string, briefing: string, prompt?: string, keepBriefing = false): SessionText {
   const dir = join(agentboxHome(), "sessions", sessionId);
-  const files: SessionText = { briefing: textFile(join(dir, "briefing.md"), briefing) };
+  const at = join(dir, "briefing.md");
+  const files: SessionText = { briefing: keepBriefing && existsSync(at) ? at : textFile(at, briefing) };
   if (prompt !== undefined) files.prompt = textFile(join(dir, "prompt.md"), prompt);
   return files;
 }

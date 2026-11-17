@@ -332,15 +332,15 @@ export function subagentWorking(text: string): boolean {
  *  `stranded`) is told about them after this long quiet: inside the hour its
  *  prompt cache lasts, and before it would be parked. */
 const STRANDED_NUDGE_MS = 55 * 60_000;
-/** ...or this long before parking, where `parkIdleMin` is set shorter. */
+/** ...or this long before parking, where the session is parked sooner. */
 const STRANDED_LEAD_MS = 5 * 60_000;
 
 /** How long a session with stranded notifications is left quiet before the
- *  nudge. Never under a minute: a notification is queued a moment before it
- *  is taken. */
-export function strandedNudgeAfter(parkIdleMin: number): number {
-  if (!parkIdleMin) return STRANDED_NUDGE_MS;
-  return Math.max(60_000, Math.min(STRANDED_NUDGE_MS, parkIdleMin * 60_000 - STRANDED_LEAD_MS));
+ *  nudge, given how long it sits idle before it is parked (0: never). Never
+ *  under a minute: a notification is queued a moment before it is taken. */
+export function strandedNudgeAfter(parkIdleMs: number): number {
+  if (!parkIdleMs) return STRANDED_NUDGE_MS;
+  return Math.max(60_000, Math.min(STRANDED_NUDGE_MS, parkIdleMs - STRANDED_LEAD_MS));
 }
 
 /** The limit hit the session's last try at a turn stopped on, with no answer
