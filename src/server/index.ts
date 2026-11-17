@@ -57,6 +57,7 @@ import { serviceInstalled, installService, lingering } from "../core/service";
 import { readUserIdentity } from "../core/user";
 import { Scheduler, type ScheduleEdit } from "../core/scheduler";
 import { parseSpec, Waits } from "../core/waits";
+import { readUntil } from "../core/waitreads";
 import { CARD_KINDS, Cards, cardsOn, moveCards } from "../core/cards";
 import type { CardKind, CardState, McpServerInput, McpState, OrgReadEvent, Session } from "../core/types";
 import { environOf, startedAtOf } from "../core/providers/procs";
@@ -1547,6 +1548,14 @@ const router = new Router(mapError)
     const id = (v: unknown) => (typeof v === "string" && /^[\w-]{1,64}$/.test(v) ? v : null);
     const until = b.until as { cmd?: unknown; cwd?: unknown } | null | undefined;
     if (until != null && (typeof until.cmd !== "string" || typeof until.cwd !== "string")) throw new HttpError(400, "until is {cmd, cwd}");
+    // A card whose check already passes would be withdrawn before anyone saw it, and its asker never hears:
+    // either the question is gone or the command has the contract backwards. Said now, to the asker.
+    if (until) {
+      const first = await readUntil({ cmd: until.cmd as string, cwd: until.cwd as string }, {}, 20_000).catch(() => null);
+      if (first?.yes) {
+        throw new HttpError(400, `no card added: its --until already exits 0, which means the question has gone away${first.said ? ` ("${first.said.slice(0, 200)}")` : ""}. If it still stands, the command is backwards: exit 0 once the question is gone, 1 while it stands.`);
+      }
+    }
     return json(
       cards.add({
         kind,

@@ -159,7 +159,8 @@ why). Arming the same wait twice is one wait.
                                     # the contract of wait until: exit 0 when the question
                                     # has gone away (what it prints is the reason shown),
                                     # exit 1 with nothing on stderr while it stands (its
-                                    # last line is shown on the card). It runs here, every
+                                    # last line is shown on the card). One that already
+                                    # exits 0 is refused: the card is not added. It runs here, every
                                     # few minutes while the card is open, and withdraws the
                                     # card itself: the user never answers a question that
                                     # went away, and you are not woken.

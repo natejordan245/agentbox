@@ -370,8 +370,6 @@ export class Cards {
     );
     const card = this.get(Number(lastInsertRowid));
     this.changed();
-    // Asked at once: one that already passes is withdrawn before its push goes out.
-    if (until) this.check();
     if (card.kind === "decision" && c.notify !== false) this.pushSoon(card);
     return card;
   }
