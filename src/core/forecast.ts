@@ -15,12 +15,16 @@
  * So the forecast is a table of averages: for every moment of every past
  * stretch of work, which pair of buckets it was in and how much that stretch
  * went on to spend; the mean per pair is what a session in that pair now is
- * expected to spend. A stretch is a run of token samples with no gap over an
- * hour — the longest a prompt cache lives, after which a claim lapses and the
- * session wakes wherever there is room (claims.ts). It is fitted per
- * provider, since a dollar-equivalent of codex is not one of claude, from the
- * token samples the fleet records anyway (cost-equivalent, pricing.ts), and
- * turned into the account's weekly points at its plan's price (rates.ts).
+ * expected to spend. The mean leans on recent work: a moment counts half as
+ * much for every `HALF_LIFE_MS` of its age, because what sessions go on to
+ * spend moves with the work the fleet is given, and a flat average keeps
+ * forecasting the work of weeks ago. A stretch is a run of token samples with
+ * no gap over an hour — the longest a prompt cache lives, after which a claim
+ * lapses and the session wakes wherever there is room (claims.ts). It is
+ * fitted per provider, since a dollar-equivalent of codex is not one of
+ * claude, from the token samples the fleet records anyway (cost-equivalent,
+ * pricing.ts), and turned into the account's weekly points at its plan's
+ * price (rates.ts).
  *
  * Idle time, the spend of the last half hour and hour, the stretch's age, the
  * hour of day, the model and who started it were tried too; none adds to
@@ -40,6 +44,8 @@ const STRETCH_GAP_MS = 60 * MIN;
 const RECENT_MS = 10 * MIN;
 /** A stretch is read this often when fitting, so the table is an average over time. */
 const STEP_MS = 5 * MIN;
+/** A moment of history counts half as much for each of these it is old. */
+const HALF_LIFE_MS = 4 * DAY;
 /** Cost-equivalent spent in the last ten minutes: nothing, a trickle, working, working hard, flat out. */
 const RECENT_EDGES = [0.001, 0.2, 1, 4];
 /** Cost-equivalent spent so far this stretch. */
@@ -101,19 +107,23 @@ function readingAt(samples: Sample[], startedAt: number, now: number, open = fal
   return { recent: Math.max(0, soFar - before), soFar: Math.max(0, soFar) };
 }
 
+/** How much a moment `at` counts in a fit made at `until`. */
+const weightAt = (at: number, until: number): number => 2 ** ((at - until) / HALF_LIFE_MS);
+
 interface Cell {
-  /** Cost-equivalent still to come, summed over every reading in the cell. */
+  /** Cost-equivalent still to come, summed over every reading in the cell,
+   *  each times its weight; and the weights, summed. */
   sum: number;
-  readings: number;
+  weight: number;
   stretches: number;
 }
 
 export type ForecastTable = Map<string, Cell>;
 
-/** What stretches went on to spend from their start, summed: per provider,
- *  model family and whether it was the session's first, and per provider
- *  under family `*`. */
-export type StartTable = Map<string, { sum: number; stretches: number }>;
+/** What stretches went on to spend from their start, summed as a `Cell` is:
+ *  per provider, model family and whether it was the session's first, and per
+ *  provider under family `*`. */
+export type StartTable = Map<string, Cell>;
 
 const startKey = (provider: string, family: string, first: boolean): string => `${provider}|${family}|${first ? 1 : 0}`;
 
@@ -151,12 +161,14 @@ function* stretchesOf(s: SessionSeries, until: number): Generator<{ i: number; j
 function fitStarts(sessions: SessionSeries[], until: number): StartTable {
   const table: StartTable = new Map();
   for (const s of sessions) {
-    for (const { i, final } of stretchesOf(s, until)) {
+    for (const { i, j, final } of stretchesOf(s, until)) {
       const first = i === 0 && s.samples[0]!.at - s.startedAt < FRESH_MS;
       if (first && !s.placed) continue;
+      const weight = weightAt(s.samples[j]!.at, until);
       for (const key of [startKey(s.provider, familyOf(s.model), first), startKey(s.provider, "*", first)]) {
-        const cell = table.get(key) ?? { sum: 0, stretches: 0 };
-        cell.sum += final;
+        const cell = table.get(key) ?? { sum: 0, weight: 0, stretches: 0 };
+        cell.sum += weight * final;
+        cell.weight += weight;
         cell.stretches++;
         table.set(key, cell);
       }
@@ -170,7 +182,7 @@ function fitStarts(sessions: SessionSeries[], until: number): StartTable {
  *  model's. Null where too few have run to say. */
 function startCost(table: StartTable, provider: string, first: boolean, model?: string | null): number | null {
   const cell = table.get(startKey(provider, model === undefined ? "*" : familyOf(model), first));
-  return cell && cell.stretches >= MIN_STRETCHES ? cell.sum / cell.stretches : null;
+  return cell && cell.stretches >= MIN_STRETCHES ? cell.sum / cell.weight : null;
 }
 
 /**
@@ -193,11 +205,12 @@ function fitForecast(sessions: SessionSeries[], until: number): ForecastTable {
         const soFar = Math.max(0, xs[at]!.cost - base);
         const before = xs[old]!.at <= t - RECENT_MS ? xs[old]!.cost - base : 0;
         const reading = { recent: Math.max(0, soFar - before), soFar };
+        const weight = weightAt(t, until);
         for (const key of [keyOf(s.provider, reading), keyOf("*", reading)]) {
           let cell = table.get(key);
-          if (!cell) table.set(key, (cell = { sum: 0, readings: 0, stretches: 0 }));
-          cell.sum += Math.max(0, final - soFar);
-          cell.readings++;
+          if (!cell) table.set(key, (cell = { sum: 0, weight: 0, stretches: 0 }));
+          cell.sum += weight * Math.max(0, final - soFar);
+          cell.weight += weight;
           if (!seen.has(key)) {
             seen.add(key);
             cell.stretches++;
@@ -214,7 +227,7 @@ function fitForecast(sessions: SessionSeries[], until: number): ForecastTable {
 function expectedCost(table: ForecastTable, provider: string, r: Reading): number | null {
   for (const p of [provider, "*"]) {
     const cell = table.get(keyOf(p, r));
-    if (cell && cell.stretches >= MIN_STRETCHES) return cell.sum / cell.readings;
+    if (cell && cell.stretches >= MIN_STRETCHES) return cell.sum / cell.weight;
   }
   return null;
 }
@@ -223,7 +236,7 @@ function expectedCost(table: ForecastTable, provider: string, r: Reading): numbe
 
 /** The table is refitted this often, from this much history. */
 const REFIT_MS = DAY;
-const HISTORY_MS = 60 * DAY;
+const HISTORY_MS = 30 * DAY;
 /** A session's forecast is recomputed this often. */
 const MEMO_MS = MIN;
 /** How far back a session's samples are read for its stretch. One running
@@ -325,7 +338,7 @@ export class Forecaster {
           const cell = this.table.get(`${provider}|${r}|${c}`);
           if (!cell) continue;
           const known = perCost !== null && cell.stretches >= MIN_STRETCHES;
-          cells.push({ recent: r, soFar: c, stretches: cell.stretches, points: known ? Math.round((cell.sum / cell.readings) * perCost * 100) / 100 : null });
+          cells.push({ recent: r, soFar: c, stretches: cell.stretches, points: known ? Math.round((cell.sum / cell.weight) * perCost * 100) / 100 : null });
         }
       }
       if (cells.length) providers.push({ provider, pointsPerCost: perCost, cells });
