@@ -105,7 +105,7 @@ async function show(api: Api, args: string[]): Promise<number> {
       ["short", c.short],
       ["options", c.options.map((o, i) => `${i + 1}. ${o}`).join("\n") || null],
       ["recommend", c.recommend],
-      ["until", c.until ? `${c.until}\n${checked(c)}` : null],
+      ["until", c.until ? `${c.until}${c.state === "open" || c.state === "later" ? `\n${checked(c)}` : ""}` : null],
       ["default", c.default ? `${c.default}${c.defaultAt ? ` (${c.defaultAt <= Date.now() ? "passed" : "at"} ${when(c.defaultAt)})` : ""}` : null],
       ["answer", c.state === "answered" ? (c.answer ? c.answer : c.kind === "decision" ? "(dismissed: they are not answering it, and nothing was typed into the asker)" : "(seen, nothing said)") : null],
       ["answered", c.answeredAt && c.state === "answered" ? when(c.answeredAt) : null],
