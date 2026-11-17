@@ -312,6 +312,36 @@
   color: var(--faint);
   font-variant-numeric: tabular-nums;
 }
+/* Where you are in the stack, and on a phone the way to the whole list: it opens as a sheet. */
+.review-count-open {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  min-height: 28px;
+  padding: 0 11px;
+  border: 0;
+  border-radius: 999px;
+  background: var(--sunken);
+  color: var(--muted);
+  font: inherit;
+  cursor: pointer;
+}
+.review-count-open:active {
+  background: var(--hover);
+  color: var(--text);
+}
+/* On a desk the index is beside the stack: the count only counts. */
+@media (min-width: 1000px) {
+  .review-count-open {
+    pointer-events: none;
+    background: none;
+    color: inherit;
+    min-height: 0;
+  }
+  .review-count-open svg {
+    display: none;
+  }
+}
 
 /* ----------------------------------------------------------- the buttons */
 
@@ -873,4 +903,18 @@
   outline: none;
   border: 0;
   box-shadow: none;
+}
+
+/* The index as a sheet, on a phone: the search stays put and the list scrolls. */
+.review-sheet-index {
+  display: flex;
+  flex-direction: column;
+  height: min(72dvh, 640px);
+  margin: 4px -8px 0;
+}
+.review-sheet-index .review-search {
+  margin: 4px 8px 8px;
+}
+.review-sheet-index .review-index-list {
+  padding-bottom: 4px;
 }

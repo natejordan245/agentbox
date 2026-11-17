@@ -9,9 +9,9 @@ export default function review(p: Plugin) {
     icon: Icon.cards,
     scoped: true,
     flush: true,
-    // Kept for later is still yours, but you have seen it: it does not nag.
-    badge: (state) => state.cards.filter((c) => c.state === "open").length,
-    badgeTitle: (n) => `${n} card${n === 1 ? "" : "s"} to review`,
+    // Only what waits on your word: notes and merges keep, and kept for later you have seen.
+    badge: (state) => state.cards.filter((c) => c.kind === "decision" && c.state === "open").length,
+    badgeTitle: (n) => `${n} decision${n === 1 ? "" : "s"} waiting on you`,
     keys: [
       ["→", "Answer the card"],
       ["↓", "Approve it"],

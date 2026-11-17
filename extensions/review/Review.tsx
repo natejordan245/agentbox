@@ -148,6 +148,8 @@ export function Review({ state, rest }: { state: AppState; rest: string }) {
   const [caughtUp, setCaughtUp] = useState<{ session: string; n: number } | null>(null);
   const respond = useCallback((c: Card) => (c.kind === "decision" ? setAnswering(c) : setCatchingUp(true)), []);
   const [reading, setReading] = useState<Card | null>(null);
+  /** On a phone, the index as a sheet: the desk has it beside the stack. */
+  const [finding, setFinding] = useState(false);
   // `#/review/card/1160` (what "card 1160" in a card or a session links to)
   // opens that card whole, fetched when this project's list does not hold it.
   const linked = Number(/^card\/(\d+)$/.exec(rest)?.[1]) || null;
@@ -308,7 +310,7 @@ export function Review({ state, rest }: { state: AppState; rest: string }) {
   // The keys, while no sheet has the keyboard.
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
-      if (answering || catchingUp || e.defaultPrevented || e.isComposing || e.metaKey || e.ctrlKey || e.altKey) return;
+      if (answering || catchingUp || finding || e.defaultPrevented || e.isComposing || e.metaKey || e.ctrlKey || e.altKey) return;
       const el = e.target as HTMLElement | null;
       if (!el?.closest(".review-shell")) return;
       if (e.key.startsWith("Arrow") && !e.shiftKey) return;
@@ -327,7 +329,7 @@ export function Review({ state, rest }: { state: AppState; rest: string }) {
     };
     addEventListener("keydown", onKey, true);
     return () => removeEventListener("keydown", onKey, true);
-  }, [answering, catchingUp, reading, tab, shownTop, act, undo, approve, respond]);
+  }, [answering, catchingUp, finding, reading, tab, shownTop, act, undo, approve, respond]);
 
   return (
     <div className="review-shell">
@@ -387,10 +389,11 @@ export function Review({ state, rest }: { state: AppState; rest: string }) {
             </div>
             <p className={`review-count${nothing ? " review-nothing" : ""}`} aria-live="polite">
               {nothing ?? (
-                <>
+                <button type="button" className="review-count-open" onClick={() => setFinding(true)} title="See them all">
                   {stack.length === 1 ? "The last one" : `${stack.indexOf(shownTop!) + 1} of ${stack.length}`}
                   {shownTop?.state === "later" ? " · kept for later" : ""}
-                </>
+                  <Icon.chevronUp size={12} />
+                </button>
               )}
             </p>
             <Actions card={top ?? shownTop!} reports={reports.length} onLater={(c) => act(c, "later")} onDismiss={(c) => act(c, "seen")} onRead={setReading} onApprove={approve} onAnswer={respond} />
@@ -441,6 +444,23 @@ export function Review({ state, rest }: { state: AppState; rest: string }) {
           reports={reports.length}
         />
       ) : null}
+      {finding ? (
+        <Modal title="Cards" onClose={() => setFinding(false)}>
+          <div className="review-sheet-index">
+            <CardFinder
+              tabs={tabs}
+              tab={tab}
+              state={state}
+              current={current}
+              onTab={setTab}
+              onPick={(c) => {
+                setFinding(false);
+                jump(c);
+              }}
+            />
+          </div>
+        </Modal>
+      ) : null}
       {catchingUp ? <CatchUpSheet cards={reports} onClose={() => setCatchingUp(false)} onStart={catchUp} /> : null}
       {answering ? <AnswerSheet card={answering} onClose={() => setAnswering(null)} onSend={(text) => act(answering, text ? "answered" : "seen", text)} /> : null}
     </div>
@@ -450,27 +470,31 @@ export function Review({ state, rest }: { state: AppState; rest: string }) {
 
 const TAB_NAME: Record<Tab, string> = { stack: "to review", later: "kept for later", done: "done" };
 
-/**
- * On a desk, beside the stack: the tab's cards as a list to scroll and jump
- * through, the one being looked at marked, and a search over them. A search
- * puts the cards whose titles have every word first, then those that have
- * them in what they say, and counts what it finds in the other tabs.
- */
-function CardIndex({
-  tabs,
-  tab,
-  state,
-  current,
-  onTab,
-  onPick,
-}: {
+/** On a desk, beside the stack: the cards to jump through (CardFinder). */
+function CardIndex(props: FinderProps) {
+  return (
+    <aside className="review-index" data-nav-region="index" aria-label="Cards">
+      <CardFinder {...props} />
+    </aside>
+  );
+}
+
+type FinderProps = {
   tabs: Record<Tab, Card[]>;
   tab: Tab;
   state: AppState;
   current: number | undefined;
   onTab: (t: Tab) => void;
   onPick: (c: Card) => void;
-}) {
+};
+
+/**
+ * The tab's cards as a list to scroll and jump
+ * through, the one being looked at marked, and a search over them. A search
+ * puts the cards whose titles have every word first, then those that have
+ * them in what they say, and counts what it finds in the other tabs.
+ */
+function CardFinder({ tabs, tab, state, current, onTab, onPick }: FinderProps) {
   const [query, setQuery] = useState("");
   const listRef = useRef<HTMLOListElement>(null);
   const from = useCallback(
@@ -495,7 +519,7 @@ function CardIndex({
   }, [current, tab]);
 
   return (
-    <aside className="review-index" data-nav-region="index" aria-label="Cards">
+    <>
       <div className="review-search">
         <Icon.search size={14} />
         <input
@@ -569,7 +593,7 @@ function CardIndex({
           );
         })}
       </ol>
-    </aside>
+    </>
   );
 }
 
