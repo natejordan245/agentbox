@@ -293,13 +293,22 @@ function remarkPrLinks(base: string) {
   };
 }
 
-/** `card 1160` (or `cards 12`) opens that review card, before the PR pass
- *  can take its number for a pull request. */
+/** `card 1160` opens that review card, and `cards 1363, 1357 and 1349` each
+ *  of the three, before the PR pass can take their numbers for pull requests. */
+const CARD_LIST = /\bcards? #?\d{1,6}\b(?:(?:,\s*(?:and\s+|or\s+)?|\s+(?:and|or)\s+)#?\d{1,6}\b)*/gi;
 function remarkCardLinks() {
+  const url = (n: string) => hrefOf({ page: "ext", id: "review", rest: `card/${n}` });
   return () => (tree: Root) => {
     rewrite(tree, true, (text, code) =>
       splitRefs(text, code, (t) =>
-        [...t.matchAll(/\bcards? #?(\d{1,6})\b/gi)].map((m) => ({ start: m.index!, end: m.index! + m[0].length, url: hrefOf({ page: "ext", id: "review", rest: `card/${m[1]}` }) })),
+        [...t.matchAll(CARD_LIST)].flatMap((list) =>
+          // The first number takes the word `card` with it; the rest are their own links.
+          [...list[0].matchAll(/#?(\d+)/g)].map((m, i) => ({
+            start: list.index! + (i ? m.index! : 0),
+            end: list.index! + m.index! + m[0].length,
+            url: url(m[1]!),
+          })),
+        ),
       ),
     );
   };
