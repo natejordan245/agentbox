@@ -34,6 +34,7 @@ import { getWait, insertWait, listOpenWaits, listWaits, updateWait } from "./db"
 import { assignedPrHolder, prReleased, prReleasedLine } from "./prclaims";
 import { FleetError, type Fleet } from "./fleet";
 import { Held, logTail, prKey, readJob, readPrs, readRun, readUntil, UNTIL_FAILURES, type JobRead, type PrRead, type RunRead } from "./waitreads";
+import { turnStatus } from "./turnstatus";
 import type { Session, Wait, WaitEnd, WaitSpec, WaitView } from "./types";
 import { describe, short, span } from "./waitwords";
 
@@ -257,13 +258,27 @@ function lookSessions(spec: Extract<WaitSpec, { kind: "session" }>, memo: Wait["
   return { end: { how: "happened", text: `${said.join("; ")}. Read it with \`agentbox log ${settled[0]!.id} -n 1\`.${rest.length ? ` Not yet: ${rest.join(", ")}; arm another wait for those.` : ""}` } };
 }
 
-/** What the session is told: one note, whole, so it reads as agentbox's own. */
-function message(w: Wait, now: number): string {
+/** How a wait ended, as one clause of a note. */
+function ending(w: Wait): string {
   const head = { happened: "HAPPENED", stuck: "CANNOT HAPPEN", timeout: "TIMED OUT", broken: "THE WAIT FAILED", cancelled: "CANCELLED" }[w.ended!];
+  return `wait ${w.id} (${describe(w.spec)}) ended: ${head}. ${w.outcome ?? ""}`.trim();
+}
+
+/** One note, whole, so it reads as agentbox's own. `]` then a newline would
+ *  end it early for whoever reads it as one. */
+const note = (body: string): string => `[agentbox: ${body.replace(/\]\n/g, "] \n").trim()}]`;
+
+/** What the session is told. */
+function message(w: Wait, now: number): string {
   const late = w.endedAt && now - w.endedAt > 2 * 60_000 ? ` (It ended ${span(now - w.endedAt)} ago; you could not be told until now.)` : "";
-  // `]` then a newline would end the note early for whoever reads it as one.
-  const body = `wait ${w.id} (${describe(w.spec)}) ended: ${head}. ${w.outcome ?? ""}${late}`.replace(/\]\n/g, "] \n").trim();
-  return `[agentbox: ${body}]`;
+  return note(`${ending(w)}${late}`);
+}
+
+/** Wait ids a `STATUS: waiting on …` line names: bare numbers, not `#123`. */
+function namedWaits(message: string | null): number[] {
+  const st = turnStatus(message);
+  if (st?.kind !== "waiting") return [];
+  return [...new Set([...st.text.matchAll(/(?<![#\w.\/-])\d{4,}\b/g)].map((m) => Number(m[0])))];
 }
 
 export class Waits {
@@ -279,8 +294,11 @@ export class Waits {
   private draftLeft = new Map<number, { at: number; text: string }>();
   private telling = new Set<number>();
 
+  /** `session:wait` pairs already told their STATUS names an ended wait: once each. */
+  private staleTold = new Set<string>();
+
   constructor(
-    private readonly fleet: Pick<Fleet, "get" | "heir" | "note" | "finishNote">,
+    private readonly fleet: Pick<Fleet, "get" | "heir" | "note" | "finishNote" | "sessions">,
     private readonly now: () => number = Date.now,
   ) {}
 
@@ -385,10 +403,35 @@ export class Waits {
           .catch((e) => console.error(`agentbox: wait ${w.id}: telling:`, e))
           .finally(() => this.telling.delete(w.id));
       }
+      this.staleStatuses(now);
     } catch (e) {
       console.error("agentbox: waits:", e);
     } finally {
       this.ticking = false;
+    }
+  }
+
+  /**
+   * A session whose turn ended `STATUS: waiting on … wait 85315` after it was
+   * told 85315 ended waits on nothing: no wait will wake it, yet it reads as
+   * waiting (on 11-17 je5m249f sat on one for hours, and the board showed it
+   * as your turn). Tell it once, with how the wait ended, so it acts on it or
+   * arms one that is live.
+   */
+  private staleStatuses(now: number): void {
+    for (const s of this.fleet.sessions()) {
+      if (s.status !== "waiting" || hold(s, now) || now - s.lastActivityAt < TICK_MS * 4) continue;
+      const stale = namedWaits(s.lastMessage)
+        .map((id) => getWait(id))
+        .filter((w): w is Wait => !!w && !!w.ended && w.toldAt !== null && w.toldAt < s.lastActivityAt && this.sessionOf(w)?.id === s.id && !this.staleTold.has(`${s.id}:${w.id}`));
+      if (stale.length === 0) continue;
+      for (const w of stale) this.staleTold.add(`${s.id}:${w.id}`);
+      const ids = stale.map((w) => w.id).join(" and ");
+      const text = note(
+        `your last STATUS says you are waiting on wait ${ids}, but ${stale.length === 1 ? "it has" : "they have"} already ended, so nothing will wake you. ${stale.map(ending).join(" ")} Act on that; for anything you still wait on, arm a live wait (\`agentbox wait\`) and end on a STATUS naming it.`,
+      );
+      console.log(`agentbox: ${s.id}'s STATUS names ended wait ${ids}; telling it`);
+      void this.fleet.note(s.id, text).catch((e) => console.error(`agentbox: telling ${s.id} its wait ${ids} ended:`, e instanceof Error ? e.message : e));
     }
   }
 
@@ -507,17 +550,9 @@ export class Waits {
       updateWait(w.id, { ended: "cancelled", endedAt: now, outcome: prReleasedLine(s?.id ?? w.sessionId), untold: null });
       return;
     }
-    const hold = !s
-      ? "its session is gone"
-      : s.closedAt
-        ? "its session is closed; it is told if it is reopened and runs again"
-        : s.host === "none" && !s.parkedAt
-          ? "its session was stopped by hand; it is told when it runs again"
-          : s.limitHit?.until && s.limitHit.until > now
-            ? `its session is stopped at a usage limit until ${new Date(s.limitHit.until).toLocaleTimeString()}`
-            : null;
-    if (hold || !s) {
-      if (w.untold !== hold) updateWait(w.id, { untold: hold });
+    const held = s ? hold(s, now) : "its session is gone";
+    if (held || !s) {
+      if (w.untold !== held) updateWait(w.id, { untold: held });
       return;
     }
     if (now < (this.tellAfter.get(w.id)?.at ?? 0)) return;
@@ -553,6 +588,19 @@ export class Waits {
     const pause = Math.min((this.tellAfter.get(id)?.pause ?? TELL_EVERY_MS / 2) * 2, 30 * 60_000);
     this.tellAfter.set(id, { at: this.now() + pause, pause });
   }
+}
+
+/** Why a session cannot be typed into now, or null when it can. */
+function hold(s: Session, now: number): string | null {
+  return s.closedAt
+    ? "its session is closed; it is told if it is reopened and runs again"
+    : s.host === "none" && !s.parkedAt
+      ? "its session was stopped by hand; it is told when it runs again"
+      : s.limitHit?.until && s.limitHit.until > now
+        ? `its session is stopped at a usage limit until ${new Date(s.limitHit.until).toLocaleTimeString()}`
+        : s.host === "external" || s.host === "subagent"
+          ? "agentbox cannot type into it"
+          : null;
 }
 
 function timedOut(w: Wait, now: number): string {
