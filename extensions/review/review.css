@@ -918,3 +918,6 @@
 .review-sheet-index .review-index-list {
   padding-bottom: 4px;
 }
+.review-sheet-index .review-search-key {
+  display: none;
+}
