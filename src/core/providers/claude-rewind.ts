@@ -15,12 +15,13 @@
  *   Enter to continue · Esc to cancel
  *
  * Enter asks what to restore, numbered, and the numbers move with what the
- * message's turn changed ("Restore code" options only when it edited files):
+ * message's turn changed ("Restore code" options only when it edited files).
+ * The heading's first words differ between Claude versions:
  *
- *   Confirm you want to restore to the point before you sent this message:
+ *   Restore to the point before you sent this message:
  *   │ Write the word one into note.txt
  *   │ (44s ago)
- *   The conversation will be forked.
+ *   The conversation goes back to before this message.
  *   The code will be unchanged.
  *   ❯ 1. Restore conversation          (or 1. Restore code and conversation,
  *     2. Summarize from here               2. Restore conversation, 3. Restore code, …)
@@ -73,7 +74,7 @@ export const rewindStart = (): RewindState => ({ opens: 0, ups: 0, seen: 0, last
 export type RewindStep = { keys: string[] } | { done: true; code: boolean } | { error: string };
 
 const LIST = /Restore the code and\/or conversation to the point before/;
-const CONFIRM = /Confirm you want to restore to the point before you sent this message/;
+const CONFIRM = /to the point before you sent this message:/;
 /** The list's rows with the pointer. */
 const POINTED = /^\s*❯\s+(.*?)\s*$/;
 const OPTION = /^\s*(?:❯\s+)?(\d+)\.\s+(.+?)\s*$/;
