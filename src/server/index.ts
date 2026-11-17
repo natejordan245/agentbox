@@ -1545,6 +1545,8 @@ const router = new Router(mapError)
     if (!CARD_KINDS.includes(kind)) throw new HttpError(400, `kind is one of ${CARD_KINDS.join(", ")}`);
     const callerPid = typeof b.callerPid === "number" && Number.isInteger(b.callerPid) && b.callerPid > 1 ? b.callerPid : null;
     const id = (v: unknown) => (typeof v === "string" && /^[\w-]{1,64}$/.test(v) ? v : null);
+    const until = b.until as { cmd?: unknown; cwd?: unknown } | null | undefined;
+    if (until != null && (typeof until.cmd !== "string" || typeof until.cwd !== "string")) throw new HttpError(400, "until is {cmd, cwd}");
     return json(
       cards.add({
         kind,
@@ -1559,6 +1561,7 @@ const router = new Router(mapError)
         key: optionalString(b, "key"),
         sessionId: id(b.session) ?? (callerPid ? fleet.callerOf(callerPid) : null),
         about: id(b.about),
+        until: until ? { cmd: until.cmd as string, cwd: until.cwd as string } : null,
         at: typeof b.at === "number" && b.at > 0 ? b.at : null,
         notify: b.notify !== false,
       }),

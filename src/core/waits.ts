@@ -33,7 +33,7 @@
 import { getWait, insertWait, listOpenWaits, listWaits, updateWait } from "./db";
 import { assignedPrHolder, prReleased, prReleasedLine } from "./prclaims";
 import { FleetError, type Fleet } from "./fleet";
-import { Held, logTail, prKey, readJob, readPrs, readRun, readUntil, type JobRead, type PrRead, type RunRead } from "./waitreads";
+import { Held, logTail, prKey, readJob, readPrs, readRun, readUntil, UNTIL_FAILURES, type JobRead, type PrRead, type RunRead } from "./waitreads";
 import type { Session, Wait, WaitEnd, WaitSpec, WaitView } from "./types";
 import { describe, short, span } from "./waitwords";
 
@@ -44,8 +44,6 @@ const PR_EVERY_MS = 30_000;
 const RUN_EVERY_MS = 60_000;
 /** Every look failing for this long is a wait that cannot watch: its session is told. */
 const BROKEN_AFTER_MS = 20 * 60_000;
-/** An `until` command that fails this many times running is broken, however fast it is asked. */
-const UNTIL_FAILURES = 5;
 /** GitHub shows a pushed head a moment after the push. */
 const HEAD_GRACE_MS = 5 * 60_000;
 /** A named check missing this long with nothing running or queued will not come by
@@ -447,7 +445,7 @@ export class Waits {
         if (this.asking.has(w.id) || (w.checkedAt !== null && now - w.checkedAt < spec.everyMs)) return;
         this.asking.add(w.id);
         // Not waited for: the command may take two minutes, and the rest are due too.
-        void readUntil(spec, w.id, w.sessionId)
+        void readUntil(spec, { AGENTBOX_WAIT: String(w.id), AGENTBOX_SESSION: w.sessionId })
           .then(
             (r) => this.looked(w, r.yes ? { end: { how: "happened", text: r.said || "The command exited 0 and printed nothing." } } : { seen: r.said ? `not yet: ${r.said}` : "not yet", memo: {} }, this.now()),
             (e) => this.failed(w, e, this.now()),

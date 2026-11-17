@@ -11,6 +11,8 @@
  *   down  (Shift+↓) — approve: the asker's recommendation is your answer. On a card
  *               that only wanted seeing, seen. A decision with no
  *               recommendation has nothing to approve, and springs back.
+ * A decision can also be dismissed (x, and its button): you are not answering
+ * it, so nothing is typed into the session that asked and it is not woken.
  * The last one can be taken back (u): an answer is held a few seconds before
  * it is typed into the session that asked.
  */
@@ -314,6 +316,7 @@ export function Review({ state, rest }: { state: AppState; rest: string }) {
       const card = reading ?? (tab === "stack" ? shownTop : null);
       if (e.key === "u") undo();
       else if (!card || card.state === "answered" || card.state === "closed") return;
+      else if (e.key === "x" && card.kind === "decision") act(card, "seen");
       else if (e.key === "ArrowRight") respond(card);
       else if (e.key === "ArrowLeft") act(card, "later");
       else if (e.key === "ArrowUp" && !reading) setReading(card);
@@ -390,7 +393,7 @@ export function Review({ state, rest }: { state: AppState; rest: string }) {
                 </>
               )}
             </p>
-            <Actions card={top ?? shownTop!} reports={reports.length} onLater={(c) => act(c, "later")} onRead={setReading} onApprove={approve} onAnswer={respond} />
+            <Actions card={top ?? shownTop!} reports={reports.length} onLater={(c) => act(c, "later")} onDismiss={(c) => act(c, "seen")} onRead={setReading} onApprove={approve} onAnswer={respond} />
           </>
         )
       ) : (
@@ -414,7 +417,7 @@ export function Review({ state, rest }: { state: AppState; rest: string }) {
       {last ? (
         <div className="review-undo" role="status">
           <span>
-            {last.what === "later" ? "Kept for later" : last.what === "seen" ? "Marked seen" : last.what === "approved" ? "Recommendation approved" : "Answer on its way"}
+            {last.what === "later" ? "Kept for later" : last.what === "seen" ? (last.card.kind === "decision" ? "Dismissed" : "Marked seen") : last.what === "approved" ? "Recommendation approved" : "Answer on its way"}
             <span className="faint"> · {last.card.title}</span>
           </span>
           <Button size="sm" icon={Icon.undo} onClick={undo}>
@@ -432,6 +435,7 @@ export function Review({ state, rest }: { state: AppState; rest: string }) {
             if (linked) go({ page: "ext", id: "review", rest: "" }, true);
           }}
           onLater={(c) => act(c, "later")}
+          onDismiss={(c) => act(c, "seen")}
           onApprove={approve}
           onAnswer={respond}
           reports={reports.length}
@@ -534,7 +538,7 @@ function CardIndex({
       <ol className="review-index-list" ref={listRef}>
         {hits.map((h, i) => {
           const c = h.card;
-          const said = c.state === "answered" ? (c.answer ? `You said: ${c.answer}` : "Seen") : c.state === "closed" ? `Withdrawn${c.closedWhy ? `: ${c.closedWhy}` : ""}` : plain(c.short);
+          const said = c.state === "answered" ? (c.answer ? `You said: ${c.answer}` : unsaid(c)) : c.state === "closed" ? `Withdrawn${c.closedWhy ? `: ${c.closedWhy}` : ""}` : plain(c.short);
           return (
             <li key={c.id}>
               {terms.length && i === 0 && h.inTitle ? <p className="review-index-group">In the title</p> : null}
@@ -577,32 +581,38 @@ function Marked({ text, terms }: { text: string; terms: string[] }) {
   );
 }
 
-/** The three gestures as buttons: for a desk, and for when a swipe misfires. */
+/** The gestures as buttons: for a desk, and for when a swipe misfires. Dismissing a decision has no swipe, only its button. */
 function Actions({
   card,
   onLater,
+  onDismiss,
   onRead,
   onApprove,
   onAnswer,
   reports,
-  long,
 }: {
   card: Card;
   onLater: (c: Card) => void;
+  onDismiss: (c: Card) => void;
   onRead?: (c: Card) => void;
   onApprove: (c: Card) => void;
   onAnswer: (c: Card) => void;
   /** How many reports a catch-up would take. */
   reports: number;
-  long?: boolean;
 }) {
   const does = downOf(card);
   return (
-    <div className={`review-actions${long ? " review-actions-long" : ""}`}>
+    <div className="review-actions">
       <button type="button" className="review-act review-act-later" onClick={() => onLater(card)} title="Keep it for later (Shift+←)">
         <Icon.chevronLeft size={18} />
         <span>Later</span>
       </button>
+      {card.kind === "decision" ? (
+        <button type="button" className="review-act review-act-dismiss" onClick={() => onDismiss(card)} title="Dismiss it: you are not answering, and the session that asked is not woken (x)">
+          <Icon.x size={18} />
+          <span>Dismiss</span>
+        </button>
+      ) : null}
       {onRead ? (
         <button type="button" className="review-act review-act-more" onClick={() => onRead(card)} title="The long version (Shift+↑)">
           <Icon.chevronUp size={18} />
@@ -667,10 +677,17 @@ function CardLinks({ card, children }: { card: Card; children: ReactNode }) {
   );
 }
 
-/** What is being suggested: the choices, what the asker would do, and what it does unasked once its time passes. */
+/** A card answered without words: a report was seen, a decision dismissed. */
+const unsaid = (c: Card): string => (c.kind === "decision" ? "Dismissed" : "Seen");
+
+const CHECK: Record<NonNullable<Card["check"]>["found"], string> = { stands: "Still stands", failed: "Could not check", broken: "Its check stopped working" };
+
+/** What is being suggested: the choices, what the asker would do, what it does unasked once its time passes, and what
+ *  its own check last found. */
 function Leaning({ card }: { card: Card }) {
   const passed = card.defaultAt !== null && card.defaultAt <= Date.now();
-  if (!card.options.length && !card.recommend && !card.default) return null;
+  const open = card.state !== "answered" && card.state !== "closed";
+  if (!card.options.length && !card.recommend && !card.default && !card.until) return null;
   return (
     <div className="card-leaning">
       {card.options.length ? (
@@ -690,9 +707,21 @@ function Leaning({ card }: { card: Card }) {
           <strong>Recommended</strong> <Markdown inline text={card.recommend} />
         </p>
       ) : null}
-      {card.default && card.state !== "answered" && card.state !== "closed" ? (
+      {card.default && open ? (
         <p className={passed ? "card-default-passed" : undefined}>
           <strong>{passed ? "Default time passed" : card.defaultAt ? `Unanswered by ${describeAt(card.defaultAt).replace(/^T/, "t")}` : "By default"}</strong> <Markdown inline text={card.default} />
+        </p>
+      ) : null}
+      {card.until && open ? (
+        <p className={card.check && card.check.found !== "stands" ? "card-default-passed" : undefined} title={`Withdraws itself when this passes: ${card.until}`}>
+          <strong>{card.check ? CHECK[card.check.found] : "Withdraws itself"}</strong>{" "}
+          {card.check ? (
+            <>
+              {card.check.said} <span className="faint">checked <RelativeTime ts={card.check.at} /></span>
+            </>
+          ) : (
+            "when its check passes"
+          )}
         </p>
       ) : null}
     </div>
@@ -828,6 +857,7 @@ function LongView({
   state,
   onClose,
   onLater,
+  onDismiss,
   onApprove,
   onAnswer,
   reports,
@@ -836,6 +866,7 @@ function LongView({
   state: AppState;
   onClose: () => void;
   onLater: (c: Card) => void;
+  onDismiss: (c: Card) => void;
   onApprove: (c: Card) => void;
   onAnswer: (c: Card) => void;
   reports: number;
@@ -909,7 +940,7 @@ function LongView({
         <Leaning card={card} />
         {card.state === "answered" ? (
           <div className="card-answer">
-            <strong>{card.answer ? "You said" : "Seen"}</strong>
+            <strong>{card.answer ? "You said" : unsaid(card)}</strong>
             {card.answer ? <p>{card.answer}</p> : null}
             <p className="faint">
               {card.answeredAt ? <RelativeTime ts={card.answeredAt} /> : null}
@@ -928,7 +959,7 @@ function LongView({
         ) : null}
       </div>
       </CardLinks>
-      {open ? <Actions card={card} reports={reports} onLater={onLater} onApprove={onApprove} onAnswer={onAnswer} long /> : null}
+      {open ? <Actions card={card} reports={reports} onLater={onLater} onDismiss={onDismiss} onApprove={onApprove} onAnswer={onAnswer} /> : null}
     </div>
   );
 }
@@ -1049,7 +1080,7 @@ function CardList({ cards, state, empty, onOpen }: { cards: Card[]; state: AppSt
             <span className="review-row-text">
               <span className="review-row-title">{c.title}</span>
               {c.state === "answered" ? (
-                <span className="review-row-said">{c.answer ? c.answer : "Seen"}</span>
+                <span className="review-row-said">{c.answer ? c.answer : unsaid(c)}</span>
               ) : c.state === "closed" ? (
                 <span className="review-row-said">Withdrawn{c.closedWhy ? `: ${c.closedWhy}` : ""}</span>
               ) : (

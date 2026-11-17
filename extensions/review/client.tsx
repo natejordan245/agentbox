@@ -16,6 +16,7 @@ export default function review(p: Plugin) {
       ["→", "Answer the card"],
       ["↓", "Approve it"],
       ["←", "Later"],
+      ["x", "Dismiss a decision"],
       ["↑", "Read it whole"],
       ["u", "Undo"],
     ],

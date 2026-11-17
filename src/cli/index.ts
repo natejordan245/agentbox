@@ -545,10 +545,13 @@ your time (src/core/yourtime.ts):
                         the fleet, the minutes they took you, and those the fleet asked of you
 
 cards (what a session hands the user to decide or to know; the app's Review page shows them):
-  card add --kind decision|merged|note --title T --short S [--long L | --long-file F] [--pr URL]
+  card add --kind decision|merged|note --title T --short S [--long L | --long-file F] [--pr URL] [--until '<command>']
            [--option O]... [--recommend R] [--default D --default-at <when>] [--key K] [--for <session>]
                         prints the card's id; the answer is typed into the session that
-                        added it, as "[card N “title”] …". --key adds it once
+                        added it, as "[card N “title”] …". --key adds it once.
+                        --until: a card about something that can be read again takes the
+                        shell line that reads it, as wait until does (exit 0: it went
+                        away); it is asked every few minutes and withdraws the card
   card list [--open|--later|--answered [--unread]|--closed] [--session ID] [--json]
   card show <id>        all of it, with the answer
   card ack <id>...      you have the answer that was waiting on it (--unread no longer lists it)

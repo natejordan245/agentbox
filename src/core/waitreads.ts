@@ -298,6 +298,8 @@ export function logTail(path: string, lines = 12, max = 1500): string {
 
 /** How long one asking of an `until` command may take. */
 const UNTIL_TIMEOUT_S = 120;
+/** An `until` command that fails this many times running is broken, however fast it is asked. */
+export const UNTIL_FAILURES = 5;
 const UNTIL_MAX = 4_000;
 
 /**
@@ -306,11 +308,11 @@ const UNTIL_MAX = 4_000;
  * Any other exit, an exit 1 with an error on stderr (a `gh` read that failed
  * makes a test after it false), or not finishing, throws: that is the command
  * failing to look, not an answer. Run by
- * `sh -c` in the directory the wait was made in, at the lowest priority, in
- * the server's environment (not the session's), told which wait and session
- * it answers for.
+ * `sh -c` in the directory it was asked from, at the lowest priority, in
+ * the server's environment (not the session's) with `told` over it: which
+ * wait or card, and which session, it answers for.
  */
-export async function readUntil(spec: UntilSpec, wait: number, session: string, timeoutMs = UNTIL_TIMEOUT_S * 1000): Promise<{ yes: boolean; said: string }> {
+export async function readUntil(spec: Pick<UntilSpec, "cmd" | "cwd">, told: Record<string, string>, timeoutMs = UNTIL_TIMEOUT_S * 1000): Promise<{ yes: boolean; said: string }> {
   await ensureCheckout(spec.cwd);
   // A separate POSIX process group bounds the shell *and* its children on
   // macOS/Linux. Killing only the shell leaves a blocked child holding pipes
@@ -323,7 +325,7 @@ export async function readUntil(spec: UntilSpec, wait: number, session: string, 
       cwd: spec.cwd,
       detached: true,
       stdio: ["ignore", "pipe", "pipe"],
-      env: { ...process.env, AGENTBOX_WAIT: String(wait), AGENTBOX_SESSION: session },
+      env: { ...process.env, ...told },
     });
     let out = "", tail = "", err = "", stderrError = false, timedOut = false;
     const timer = setTimeout(() => {

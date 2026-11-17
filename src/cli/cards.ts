@@ -31,7 +31,7 @@ export async function card(api: Api, args: string[]): Promise<number> {
 }
 
 async function add(api: Api, args: string[]): Promise<number> {
-  const { flags, rest } = parseArgs(args, ["kind", "title", "short", "long", "long-file", "pr", "option", "recommend", "default", "default-at", "key", "for"], []);
+  const { flags, rest } = parseArgs(args, ["kind", "title", "short", "long", "long-file", "pr", "option", "recommend", "default", "default-at", "key", "for", "until"], []);
   if (rest.length) throw new Error(`unexpected argument "${rest[0]}": a card's parts are options (--title, --short, …)`);
   // --option comes any number of times, and parseArgs keeps one value for a flag.
   const options = args.flatMap((a, i) => (a === "--option" ? [args[i + 1]!] : a.startsWith("--option=") ? [a.slice("--option=".length)] : []));
@@ -63,6 +63,7 @@ async function add(api: Api, args: string[]): Promise<number> {
     key: str(flags.get("key")),
     session: process.env.AGENTBOX_SESSION,
     about: str(flags.get("for")),
+    until: flags.has("until") ? { cmd: need("until"), cwd: process.cwd() } : undefined,
     callerPid: process.pid,
   });
   console.log(String(c.id));
@@ -104,8 +105,9 @@ async function show(api: Api, args: string[]): Promise<number> {
       ["short", c.short],
       ["options", c.options.map((o, i) => `${i + 1}. ${o}`).join("\n") || null],
       ["recommend", c.recommend],
+      ["until", c.until ? `${c.until}\n${checked(c)}` : null],
       ["default", c.default ? `${c.default}${c.defaultAt ? ` (${c.defaultAt <= Date.now() ? "passed" : "at"} ${when(c.defaultAt)})` : ""}` : null],
-      ["answer", c.state === "answered" ? (c.answer ? c.answer : "(seen, nothing said)") : null],
+      ["answer", c.state === "answered" ? (c.answer ? c.answer : c.kind === "decision" ? "(dismissed: they are not answering it, and nothing was typed into the asker)" : "(seen, nothing said)") : null],
       ["answered", c.answeredAt && c.state === "answered" ? when(c.answeredAt) : null],
       ["withdrawn", c.state === "closed" ? (c.closedWhy ?? "yes") : null],
     ];
@@ -140,9 +142,16 @@ async function close(api: Api, args: string[]): Promise<number> {
 
 const when = (at: number): string => new Date(at).toLocaleString([], { month: "short", day: "numeric", hour: "numeric", minute: "2-digit" });
 
+/** What the last look of its `until` command found. */
+function checked(c: Card): string {
+  if (!c.check) return "not asked yet";
+  const found = { stands: "still stands", failed: "could not look", broken: "could not look, and is asked no more" }[c.check.found];
+  return `${found}, ${when(c.check.at)}${c.check.said ? `: ${c.check.said}` : ""}`;
+}
+
 /** Where it stands, in a word or two. */
 function status(c: Card): string {
-  if (c.state === "answered") return !c.answer ? "seen" : c.unread ? "answered, unread" : "answered";
+  if (c.state === "answered") return !c.answer ? (c.kind === "decision" ? "dismissed" : "seen") : c.unread ? "answered, unread" : "answered";
   if (c.state === "closed") return "withdrawn";
   const passed = c.defaultAt !== null && c.defaultAt <= Date.now() ? ", default passed" : "";
   return `${c.state}${passed}`;

@@ -1571,7 +1571,7 @@ export interface Card {
   /** The session it is about, when that is another. */
   about: string | null;
   state: CardState;
-  /** The user's words; "" when it was only seen. */
+  /** The user's words; "" when it was only seen, or a decision dismissed. */
   answer: string | null;
   answeredAt: number | null;
   /** When the answer reached a session: typed into the asker, which then took a
@@ -1582,6 +1582,13 @@ export interface Card {
   laterAt: number | null;
   createdAt: number;
   closedWhy: string | null;
+  /** The command that says the question went away (exit 0, the contract of
+   *  `agentbox wait until`): asked while the card is open, and it withdraws it. */
+  until: string | null;
+  /** Its last look, null before the first: the question still `stands` (with
+   *  what the command said), the look `failed` (with why), or it failed so many
+   *  times running that it is `broken` and asked no more. */
+  check: { at: number; found: "stands" | "failed" | "broken"; said: string | null } | null;
 }
 
 /** Changes on a slower clock; pushed only when it moves. */

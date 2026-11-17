@@ -6,8 +6,10 @@
  * pull request that merged, a note. The app's Review page shows them one at
  * a time. An answer is typed into the asking session as the user's own
  * words, `[card 12 “title”] …`, through the send path, which wakes a parked
- * session and resumes a stopped one. An empty answer means "seen" and is
- * typed nowhere: forty merged cards must not wake their session forty times.
+ * session and resumes a stopped one. An empty answer means "seen", and on a
+ * decision "dismissed": you are not answering it. It is typed nowhere: forty
+ * merged cards must not wake their session forty times, nor a question you
+ * will not answer wake one to hear that.
  *
  * The answer is held `UNDO_MS` before it is typed, so the last gesture can be
  * taken back, or less when the app stops offering the undo (`send`); once
@@ -31,6 +33,14 @@
  * card of its own open (the steward's, `card add`) gets none: that one already
  * asks.
  *
+ * A card about something that can be read again (a lag, a count, a pull
+ * request's state) carries the command that reads it (`until`, the contract
+ * of `agentbox wait until`). The server asks it while the card is open
+ * (`check`), and the first exit 0 withdraws the card with what the command
+ * printed: no session is woken, and you never answer a question that went
+ * away. One that cannot look `UNTIL_FAILURES` times running is asked no more,
+ * and the card stays, saying so.
+ *
  * With the Review extension turned off nobody sees a card, so there are none:
  * `add` refuses, an ask stays in its conversation, and the briefing tells
  * every session to ask there (`providers/briefing.ts`).
@@ -40,11 +50,13 @@
  * shows that the time has passed.
  */
 
+import { existsSync } from "node:fs";
 import { getDb } from "./db";
 import { extensionOn } from "./extensions";
 import { FleetError, type Fleet } from "./fleet";
 import { turnStatus } from "./turnstatus";
 import type { Card, CardKind, CardState, Session } from "./types";
+import { readUntil, UNTIL_FAILURES } from "./waitreads";
 
 export const CARD_KINDS: readonly CardKind[] = ["decision", "merged", "note"];
 /** How long an answer waits before it is typed into the session: the undo. */
@@ -62,6 +74,8 @@ const ASK_AFTER_MS = 60 * 60_000;
 /** One older than this is history (its work moved on, or you chose to leave it), not a new question. */
 const ASK_WITHIN_MS = 24 * 60 * 60_000;
 const ASK_CHECK_MS = 60_000;
+/** How often an open card's `until` command is asked. */
+const CHECK_EVERY_MS = 5 * 60_000;
 /** Cards are shown by this extension; with it off, there are none. */
 export const cardsOn = (): boolean => extensionOn("review");
 export const CARDS_OFF = "Review cards are off (the Review extension is turned off), so nobody would see a card. Ask or tell the user in your own conversation instead, with your recommendation, and end your turn to wait for the answer.";
@@ -74,6 +88,7 @@ type Row = {
   default_text: string | null; default_at: number | null; key: string | null; session_id: string | null; about: string | null;
   state: CardState; answer: string | null; answered_at: number | null; delivered_at: number | null; tried_at: number | null;
   typed_at: number | null; taken: number; later_at: number | null; created_at: number; closed_why: string | null; undo: string | null;
+  until_cmd: string | null; until_cwd: string | null; checked_at: number | null; check_seen: string | null; check_failures: number;
 };
 
 /** The asker replied to the answer: its transcript took a prompt after the
@@ -98,6 +113,8 @@ function toCard(r: Row, withLong: boolean): Card {
     sessionId: r.session_id, about: r.about, state: r.state, answer: r.answer, answeredAt: r.answered_at,
     deliveredAt: r.delivered_at ?? (r.taken ? r.typed_at : null), unread: r.state === "answered" && !!r.answer && !r.taken,
     laterAt: r.later_at, createdAt: r.created_at, closedWhy: r.closed_why,
+    until: r.until_cmd,
+    check: r.checked_at === null ? null : { at: r.checked_at, found: r.check_failures >= UNTIL_FAILURES ? "broken" : r.check_failures ? "failed" : "stands", said: r.check_seen },
   };
 }
 
@@ -114,6 +131,8 @@ export interface NewCard {
   key?: string | null;
   sessionId?: string | null;
   about?: string | null;
+  /** The command that says the question went away, and the directory it runs in. */
+  until?: { cmd: string; cwd: string } | null;
   /** When it happened, for one added after the fact; never later than now. */
   at?: number | null;
   /** False: a decision that does not push to your devices (an agent's Feed already shows it). */
@@ -172,6 +191,8 @@ function askOf(s: Session): NewCard | null {
 export class Cards {
   private pushTimer: ReturnType<typeof setTimeout> | null = null;
   private pushing: Card[] = [];
+  /** Cards whose `until` command is still running. */
+  private checking = new Set<number>();
 
   constructor(
     private readonly fleet: Fleet,
@@ -190,6 +211,7 @@ export class Cards {
     this.fleet.on("closed", (id: string) => this.dropAsk(id));
     setInterval(() => {
       this.settle();
+      this.check();
       void this.carryAsks().catch((e) => console.error("agentbox: asks:", e));
     }, ASK_CHECK_MS).unref?.();
   }
@@ -197,6 +219,38 @@ export class Cards {
   /** An answer its asker has replied to is delivered for good, whatever that session is told next. */
   private settle(): void {
     getDb().run(`UPDATE cards SET delivered_at = typed_at WHERE state = 'answered' AND typed_at IS NOT NULL AND delivered_at IS NULL AND ${REPLIED}`);
+  }
+
+  /** Ask the `until` command of each open card that is due. Its exit 0 withdraws the card only while it is still open:
+   *  an answer given while the command ran stands. */
+  private check(): void {
+    const due = getDb().query(
+      `SELECT id, until_cmd, until_cwd, session_id FROM cards
+       WHERE until_cmd IS NOT NULL AND state IN ('open','later') AND check_failures < ? AND COALESCE(checked_at, 0) <= ?`,
+    ).all(UNTIL_FAILURES, this.now() - CHECK_EVERY_MS) as Pick<Row, "id" | "until_cmd" | "until_cwd" | "session_id">[];
+    for (const r of due) {
+      if (this.checking.has(r.id)) continue;
+      this.checking.add(r.id);
+      // Not `readUntil`'s own remedy for a missing directory, which cuts a closed session's worktree again.
+      const look = existsSync(r.until_cwd!)
+        ? readUntil({ cmd: r.until_cmd!, cwd: r.until_cwd! }, { AGENTBOX_CARD: String(r.id), AGENTBOX_SESSION: r.session_id ?? "" })
+        : Promise.reject(new Error(`the directory it runs in is gone: ${r.until_cwd}`));
+      void look
+        .then(
+          ({ yes, said }) => {
+            if (!yes) return getDb().run(`UPDATE cards SET checked_at = ?, check_seen = ?, check_failures = 0 WHERE id = ?`, [this.now(), said.slice(0, SHORT_MAX) || null, r.id]);
+            const why = `Its check passed: ${said.slice(0, SHORT_MAX) || "the question went away."}`;
+            const { changes } = getDb().run(`UPDATE cards SET state = 'closed', closed_why = ?, answered_at = ?, undo = NULL WHERE id = ? AND state IN ('open','later')`, [why, this.now(), r.id]);
+            if (changes) console.log(`agentbox: card ${r.id} withdrawn by its check`);
+          },
+          (e) => getDb().run(`UPDATE cards SET checked_at = ?, check_seen = ?, check_failures = check_failures + 1 WHERE id = ?`, [this.now(), (e as Error).message.slice(0, SHORT_MAX), r.id]),
+        )
+        .catch((e) => console.error(`agentbox: card ${r.id}: its check:`, e))
+        .finally(() => {
+          this.checking.delete(r.id);
+          this.changed();
+        });
+    }
   }
 
   /** Close the card a session's ask became, if one is open. */
@@ -300,6 +354,8 @@ export class Cards {
     const title = c.title.trim().slice(0, TITLE_MAX);
     const short = c.short.trim().slice(0, SHORT_MAX);
     if (!title || !short) throw new FleetError(400, "a card needs a title and a short version");
+    const until = c.until ? { cmd: c.until.cmd.trim(), cwd: c.until.cwd } : null;
+    if (until && (!until.cmd || !until.cwd.startsWith("/"))) throw new FleetError(400, "a card's until is a command and the directory it runs in");
     const key = c.key?.trim() || null;
     if (key) {
       const have = getDb().query(`${CARDS} WHERE key = ?`).get(key) as Row | null;
@@ -308,12 +364,14 @@ export class Cards {
     const text = (v: string | null | undefined, max = SHORT_MAX) => v?.trim().slice(0, max) || null;
     const options = (c.options ?? []).map((o) => text(o)).filter(Boolean);
     const { lastInsertRowid } = getDb().run(
-      `INSERT INTO cards (kind, title, short, long, pr, options, recommend, default_text, default_at, key, session_id, about, state, created_at)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'open', ?)`,
-      [c.kind, title, short, text(c.long, LONG_MAX), text(c.pr, 500), options.length ? JSON.stringify(options) : null, text(c.recommend), text(c.default), c.defaultAt ?? null, key, c.sessionId ?? null, c.about ?? null, Math.min(c.at ?? this.now(), this.now())],
+      `INSERT INTO cards (kind, title, short, long, pr, options, recommend, default_text, default_at, key, session_id, about, until_cmd, until_cwd, state, created_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'open', ?)`,
+      [c.kind, title, short, text(c.long, LONG_MAX), text(c.pr, 500), options.length ? JSON.stringify(options) : null, text(c.recommend), text(c.default), c.defaultAt ?? null, key, c.sessionId ?? null, c.about ?? null, until?.cmd ?? null, until?.cwd ?? null, Math.min(c.at ?? this.now(), this.now())],
     );
     const card = this.get(Number(lastInsertRowid));
     this.changed();
+    // Asked at once: one that already passes is withdrawn before its push goes out.
+    if (until) this.check();
     if (card.kind === "decision" && c.notify !== false) this.pushSoon(card);
     return card;
   }
@@ -330,14 +388,14 @@ export class Cards {
     this.pushTimer.unref?.();
   }
 
-  /** The user's answer; "" for a card that only wanted seeing. Typed into the
-   *  asking session after `UNDO_MS`, unless taken back. */
+  /** The user's answer, typed into the asking session after `UNDO_MS` unless
+   *  taken back; "" for a card that only wanted seeing or a decision they
+   *  dismiss, which is typed nowhere. */
   answer(id: number, text: string): Card {
     const r = this.row(id);
     if (r.state === "closed") throw new FleetError(409, `card ${id} was withdrawn: ${r.closed_why ?? "the question went away"}`);
     if (r.state === "answered" && (r.taken || r.typed_at !== null)) throw new FleetError(409, `card ${id} was answered already, and the answer has gone to its session`);
     const answer = text.trim();
-    if (!answer && r.kind === "decision") throw new FleetError(400, "a decision needs an answer; keep it for later instead");
     const at = this.now();
     getDb().run(`UPDATE cards SET state = 'answered', answer = ?, answered_at = ?, tried_at = NULL, undo = ? WHERE id = ?`, [
       answer, at, JSON.stringify({ state: r.state === "answered" ? "open" : r.state, laterAt: r.later_at }), id,

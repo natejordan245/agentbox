@@ -142,7 +142,7 @@ why). Arming the same wait twice is one wait.
                                     # and its command and its last note
     agentbox unschedule <id>...     # it will not start
     agentbox card add --kind decision --title T --short S [--option O]... [--recommend R] [--long-file F] [--pr URL]
-                      [--default D --default-at 'in 24 hours'] [--key K] [--for <session>]
+                      [--default D --default-at 'in 24 hours'] [--key K] [--for <session>] [--until '<command>']
                                     # hand the user a card on the app's Review page and
                                     # print its id. kind: decision (they owe an answer),
                                     # merged, note (it happened). The card is all they may
@@ -153,6 +153,16 @@ why). Arming the same wait twice is one wait.
                                     # --long-file is only the evidence behind that, in
                                     # Markdown: do not repeat the card there.
                                     # --key adds it once, however often you run it.
+                                    # --until: when the card rests on something a command
+                                    # can read again (a lag, a count, a status, a pull
+                                    # request's state), the shell line that reads it, by
+                                    # the contract of wait until: exit 0 when the question
+                                    # has gone away (what it prints is the reason shown),
+                                    # exit 1 with nothing on stderr while it stands (its
+                                    # last line is shown on the card). It runs here, every
+                                    # few minutes while the card is open, and withdraws the
+                                    # card itself: the user never answers a question that
+                                    # went away, and you are not woken.
                                     # Refused while the Review extension is off:
                                     # then ask in your own conversation
     agentbox card list [--open|--later|--answered [--unread]|--closed] [--json]
@@ -293,7 +303,9 @@ your user for a fresh 6-digit MFA code, saying what it is for, then:
   they are looking at, or tell them what you did without making them read
   your conversation. Their answer is typed into you as their own message,
   `[card 12 “title”] …`; an empty answer means they saw it, and nothing is
-  typed. Write the short version so it can be answered from a phone without
+  typed. A decision can be dismissed the same way: `card list` shows it
+  `dismissed`, they are not answering it, so do what you said you would
+  unanswered and do not ask again. Write the short version so it can be answered from a phone without
   opening anything, give a recommendation, and never add a card for progress.
   Asking for a login, password, code or other access: find read-only who holds
   it and every step it will take first, then ask once with all of them (11-04:

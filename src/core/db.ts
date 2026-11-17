@@ -545,6 +545,15 @@ const MIGRATIONS: readonly string[] = [
       AND COALESCE(json_extract(facts, '$.lastTurnAt'), json_extract(facts, '$.lastPromptAt')) >= cards.typed_at
       FROM sessions WHERE sessions.id = cards.session_id), 0);
   `,
+  // 47 — the command that says a card's question went away, and its last
+  // look (src/core/cards.ts).
+  `
+  ALTER TABLE cards ADD COLUMN until_cmd TEXT;
+  ALTER TABLE cards ADD COLUMN until_cwd TEXT;
+  ALTER TABLE cards ADD COLUMN checked_at INTEGER;
+  ALTER TABLE cards ADD COLUMN check_seen TEXT;
+  ALTER TABLE cards ADD COLUMN check_failures INTEGER NOT NULL DEFAULT 0;
+  `,
 ];
 
 function migrate(d: Database) {

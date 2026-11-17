@@ -321,14 +321,12 @@
 }
 .review-actions {
   flex: none;
-  display: grid;
-  grid-template-columns: 1fr 1fr 1.15fr 1.15fr;
+  display: flex;
   gap: 8px;
 }
-.review-actions-long {
-  grid-template-columns: 1fr 1.15fr 1.15fr;
-}
 .review-act {
+  flex: 1 1 0;
+  min-width: 0;
   display: inline-flex;
   align-items: center;
   justify-content: center;
@@ -350,6 +348,10 @@
 .review-act:disabled {
   opacity: 0.45;
   cursor: default;
+}
+.review-act-approve,
+.review-act-answer {
+  flex-grow: 1.15;
 }
 .review-act-approve {
   border-color: color-mix(in srgb, var(--success) 55%, var(--border-strong));
@@ -590,9 +592,12 @@
 }
 
 @media (max-width: 640px) {
-  /* Four across a phone: the words carry it, the arrows are the swipes. */
+  /* Four across a phone: the words carry it, the arrows are the swipes. A decision's five have room for the words alone. */
   .review-actions {
     gap: 6px;
+  }
+  .review-actions:has(.review-act-dismiss) .review-act svg {
+    display: none;
   }
   .review-act {
     gap: 3px;
