@@ -13,7 +13,10 @@
  *
  * The answer is held `UNDO_MS` before it is typed, so the last gesture can be
  * taken back, or less when the app stops offering the undo (`send`); once
- * typed it cannot. A parked asker starts resuming the moment it is answered. A session with a decision open holds it
+ * typed it cannot. A parked asker is resumed with the answer as its prompt,
+ * not woken early and typed into: a TUI just started takes the Enter of a
+ * message pasted before it settles, and the answer sat unsent in its input
+ * box. A session with a decision open holds it
  * as it would a wait (`openAsks`): it may be parked, but it does not close
  * itself. Typed is not read: the answer is delivered once the asker has
  * replied to it (`TAKEN`). Until then, and for good when the asker is gone, you
@@ -111,7 +114,7 @@ function toCard(r: Row, withLong: boolean): Card {
     id: r.id, kind: r.kind, title: r.title, short: r.short, hasLong: !!r.long, ...(withLong ? { long: r.long } : {}),
     pr: r.pr, options: r.options ? (JSON.parse(r.options) as string[]) : [], recommend: r.recommend, default: r.default_text, defaultAt: r.default_at, key: r.key,
     sessionId: r.session_id, about: r.about, state: r.state, answer: r.answer, answeredAt: r.answered_at,
-    deliveredAt: r.delivered_at ?? (r.taken ? r.typed_at : null), unread: r.state === "answered" && !!r.answer && !r.taken,
+    deliveredAt: r.delivered_at ?? (r.taken ? r.typed_at : null), typedAt: r.typed_at, unread: r.state === "answered" && !!r.answer && !r.taken,
     laterAt: r.later_at, createdAt: r.created_at, closedWhy: r.closed_why,
     until: r.until_cmd,
     check: r.checked_at === null ? null : { at: r.checked_at, found: r.check_failures >= UNTIL_FAILURES ? "broken" : r.check_failures ? "failed" : "stands", said: r.check_seen },
@@ -398,10 +401,7 @@ export class Cards {
     getDb().run(`UPDATE cards SET state = 'answered', answer = ?, answered_at = ?, tried_at = NULL, undo = ? WHERE id = ?`, [
       answer, at, JSON.stringify({ state: r.state === "answered" ? "open" : r.state, laterAt: r.later_at }), id,
     ]);
-    if (answer) {
-      this.deliverLater(id, UNDO_MS);
-      this.wake(r.session_id);
-    }
+    if (answer) this.deliverLater(id, UNDO_MS);
     this.changed();
     return this.get(id);
   }
@@ -410,20 +410,6 @@ export class Cards {
   async send(id: number): Promise<Card> {
     await this.deliver(id, true);
     return this.get(id);
-  }
-
-  /** Start resuming a parked or stopped asker while the answer waits out its
-   *  undo, so a short-lived answer (an MFA code) is not spent on its start. A
-   *  taken-back answer leaves it running idle, to be parked again. */
-  private wake(sessionId: string | null): void {
-    if (!sessionId) return;
-    try {
-      const s = this.fleet.get(sessionId);
-      if (s.host !== "none" || s.closedAt !== null) return;
-    } catch {
-      return;
-    }
-    this.fleet.resume(sessionId).catch((e) => console.error(`agentbox: waking ${sessionId} for its card's answer:`, (e as Error).message));
   }
 
   /** Keep it for later. */

@@ -1582,6 +1582,9 @@ export interface Card {
   /** When the answer reached a session: typed into the asker, which then took a
    *  turn on it, or a session said it has it (`card ack`). */
   deliveredAt: number | null;
+  /** When the answer was typed into the asker; null while it waits out its
+   *  undo, and for good when it could not be typed (the server log says why). */
+  typedAt: number | null;
   /** Answered in words that no session has yet. */
   unread: boolean;
   laterAt: number | null;
