@@ -435,7 +435,7 @@ function listen(): void {
  *  the same reason, and one turn means a tool call ends it unanswered. */
 function btw(question: string): Promise<{ answer?: string; error?: string }> {
   if (!sessionId) return Promise.resolve({ error: "it has no conversation yet" });
-  const prompt = `<system-reminder>This is a side question from the user, asked while you may be working on the main task. Answer it directly from what you already know in this conversation. Do not use any tools; nothing you write here joins the main conversation.</system-reminder>\n\n${question}`;
+  const prompt = `<system-reminder>This is a side question from the user. You are still working on the main task in another process: a tool call above with no result yet is still running, not stopped. Answer only the question, briefly, from what you already know in this conversation. Do not use any tools, and add no status line or sign-off; nothing you write here joins the main conversation.</system-reminder>\n\n${question}`;
   const args = [...resumeArgv(argv.slice(1), sessionId), "--fork-session", "--no-session-persistence", "--max-turns", "1", "-p", "--output-format", "json"];
   return new Promise((done) => {
     const p = spawn(argv[0]!, args, { stdio: ["pipe", "pipe", "pipe"] });
