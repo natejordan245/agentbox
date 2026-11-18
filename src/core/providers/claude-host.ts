@@ -70,6 +70,8 @@ let sessionId: string | null = sessionFromArgv(argv);
  *  message sent mid-turn can join the running turn, so there is no counting
  *  results against messages. */
 let busy = false;
+/** What the CLI says it is doing in a turn ("compacting", "requesting"). */
+let status: string | null = null;
 let menu: Menu | null = null;
 let wantTui = false;
 let swapping = false;
@@ -126,7 +128,9 @@ function foot(): string[] {
   const lines = draft.split("\n");
   const shown = lines.length > 1 ? `${lines[0]} (+${lines.length - 1} lines)` : lines[0]!;
   const state = busy ? " · esc to interrupt" : "";
-  return [RULE, `❯ ${shown}`, RULE, `  ⏵⏵ bypass permissions on (headless, agentbox)${state}`];
+  // A compaction runs a minute or more with nothing else to show for it.
+  const doing = !busy ? [] : [status === "compacting" ? "✻ Compacting conversation…" : "✻ Working…", ""];
+  return [...doing, RULE, `❯ ${shown}`, RULE, `  ⏵⏵ bypass permissions on (headless, agentbox)${state}`];
 }
 
 let paintQueued = false;
@@ -187,6 +191,7 @@ function onMessage(m: any): void {
         busy = true;
         if (typeof m.session_id === "string") sessionId = m.session_id;
       }
+      else if (m.subtype === "status") status = m.status ?? null;
       else if (m.subtype === "compact_boundary") say("✻ Conversation compacted");
       break;
     case "assistant":
@@ -206,6 +211,7 @@ function onMessage(m: any): void {
       break;
     case "result":
       busy = false;
+      status = null;
       if (m.is_error) {
         const why = typeof m.result === "string" && m.result ? m.result : (m.errors ?? []).join("; ") || m.subtype;
         if (m.subtype !== "error_during_execution") say(`● ${why}`);
