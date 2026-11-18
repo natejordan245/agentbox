@@ -40,6 +40,8 @@ if (!argv.length) {
 }
 const sockPath = process.env.AGENTBOX_CLAUDE_HOST ?? null;
 const out = process.stdout;
+// A pane closed under it is no reason to die before the CLI it runs.
+out.on("error", () => {});
 
 // Claude reads a first prompt from stdin when stdin is not a terminal; the
 // keyboard is then the controlling terminal.
@@ -452,14 +454,22 @@ function finish(code: number): void {
   closeServer();
   try {
     kb.setRawMode(false);
-  } catch {}
-  out.write("\x1b[?2004l");
+    out.write("\x1b[?2004l");
+  } catch {
+    // The terminal went with the pane.
+  }
   if (ttyFd) closeSync(ttyFd);
   process.exit(code);
 }
 
+// However it ends, a socket left behind would name a host that is gone.
+process.on("exit", () => {
+  if (sockPath && server) rmSync(sockPath, { force: true });
+});
+
 for (const sig of ["SIGTERM", "SIGHUP", "SIGINT"] as const) {
   process.on(sig, () => {
+    closeServer();
     const p = current ?? child;
     if (p && p.exitCode === null) {
       p.once("exit", () => finish(143));
