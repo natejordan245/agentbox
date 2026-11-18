@@ -17,8 +17,10 @@
  * goes over the socket, one JSON line each way:
  *
  *   {"op":"answer","answers":[{labels,other?}…]}  answer the open question
+ *   {"op":"btw","question"}  answer a side question from a throwaway fork
+ *                 of the conversation, mid-turn or not: {"answer"}
  *   {"op":"tui"}  hand the pane to the real TUI (`claude --resume`) as soon
- *                 as no turn runs: for a terminal attached, a rewind, a /btw
+ *                 as no turn runs: for a terminal attached, a rewind
  *
  * The host lives as long as the CLI it runs: it exits with the CLI's code,
  * and a SIGTERM or SIGHUP to it is passed on.
@@ -411,6 +413,8 @@ function listen(): void {
       if (req.op === "answer") {
         const error = answer(Array.isArray(req.answers) ? req.answers : []);
         c.end(`${JSON.stringify(error ? { error } : { ok: true })}\n`);
+      } else if (req.op === "btw") {
+        void btw(String(req.question ?? "")).then((r) => c.end(`${JSON.stringify(r)}\n`));
       } else if (req.op === "tui") {
         wantTui = true;
         c.end(`${JSON.stringify({ ok: true, now: !busy && !menu })}\n`);
@@ -420,6 +424,37 @@ function listen(): void {
     c.on("error", () => {});
   });
   server.listen(sockPath);
+}
+
+// ------------------------------------------------------------- side questions
+
+/** What the TUI's /btw does, without its screen: one reply, from the
+ *  conversation as saved so far, by a fork that keeps no transcript (so it is
+ *  on no board). Same argv, so the same tools and system prompt, and the
+ *  conversation reads from cache; the instruction rides in the message for
+ *  the same reason, and one turn means a tool call ends it unanswered. */
+function btw(question: string): Promise<{ answer?: string; error?: string }> {
+  if (!sessionId) return Promise.resolve({ error: "it has no conversation yet" });
+  const prompt = `<system-reminder>This is a side question from the user, asked while you may be working on the main task. Answer it directly from what you already know in this conversation. Do not use any tools; nothing you write here joins the main conversation.</system-reminder>\n\n${question}`;
+  const args = [...resumeArgv(argv.slice(1), sessionId), "--fork-session", "--no-session-persistence", "--max-turns", "1", "-p", "--output-format", "json"];
+  return new Promise((done) => {
+    const p = spawn(argv[0]!, args, { stdio: ["pipe", "pipe", "pipe"] });
+    let outBuf = "";
+    let errBuf = "";
+    p.stdout!.setEncoding("utf8").on("data", (d: string) => (outBuf += d));
+    p.stderr!.setEncoding("utf8").on("data", (d: string) => (errBuf += d));
+    p.on("error", (e) => done({ error: e.message }));
+    p.on("close", () => {
+      let r: any = null;
+      try {
+        r = JSON.parse(outBuf);
+      } catch {}
+      const answer = typeof r?.result === "string" ? r.result.trim() : "";
+      if (answer && !r.is_error) done({ answer });
+      else done({ error: answer || errBuf.trim().split("\n").pop() || (r?.subtype === "error_max_turns" ? "it reached for a tool instead of answering" : "no answer") });
+    });
+    p.stdin!.end(prompt);
+  });
 }
 
 // ------------------------------------------------------------- the TUI

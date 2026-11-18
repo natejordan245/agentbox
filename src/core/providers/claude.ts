@@ -592,7 +592,7 @@ function hosting(cmd: Command, session: string, hosted: boolean | undefined): Co
  * One request to a session's host (`claude-host.ts` says which), and its
  * reply. Null when the session is not hosted, or its host is gone.
  */
-export function askHost(session: string, req: Record<string, unknown>): Promise<{ ok?: boolean; now?: boolean; error?: string } | null> {
+export function askHost(session: string, req: Record<string, unknown>, timeoutMs = 5_000): Promise<{ ok?: boolean; now?: boolean; answer?: string; error?: string } | null> {
   const sock = hostSocket(session);
   if (!existsSync(sock)) return Promise.resolve(null);
   return new Promise((done) => {
@@ -603,7 +603,7 @@ export function askHost(session: string, req: Record<string, unknown>): Promise<
       c.destroy();
       done(v);
     };
-    const timer = setTimeout(() => end(null), 5_000);
+    const timer = setTimeout(() => end(null), timeoutMs);
     c.setEncoding("utf8");
     c.on("connect", () => c.write(`${JSON.stringify(req)}\n`));
     c.on("data", (d: string) => {

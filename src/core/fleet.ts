@@ -4063,7 +4063,7 @@ export class Fleet extends EventEmitter {
       const pane = s.tmux ?? getSessionRecord(id)?.tmux;
       if (!pane) throw new FleetError(409, "not running in agentbox");
       if (this.startedAt.has(id)) await this.untilSettled(id, pane);
-      if (s.provider === "claude") await this.toTui(id, pane, true);
+      if (s.provider === "claude") await this.toTui(id, pane);
       if (s.provider === "claude") await this.clearBtw(id, pane);
       await this.clearLimitDialog(s.provider, pane);
       attempt?.();
@@ -4233,18 +4233,14 @@ export class Fleet extends EventEmitter {
 
   /**
    * Hand a headless Claude session's pane to its TUI (`claude-host.ts`) for
-   * what only the TUI's screen does: a rewind, a /btw. With `stopTurn` a
-   * running turn is interrupted first, as the TUI's own rewind does; without,
-   * it is an error, and the TUI comes back when the turn ends. Nothing for a
-   * session in the TUI already.
+   * what only the TUI's screen does: a rewind. A running turn is interrupted
+   * first, as the TUI's own rewind does. Nothing for a session in the TUI
+   * already.
    */
-  private async toTui(id: string, pane: string, stopTurn: boolean): Promise<void> {
+  private async toTui(id: string, pane: string): Promise<void> {
     const r = await askHost(id, { op: "tui" });
     if (!r) return;
-    if (!r.now) {
-      if (!stopTurn) throw new FleetError(409, "it runs headless and is mid-turn; its own screen comes back when the turn ends");
-      await this.deps.runtime.sendKeys(pane, ["Escape"]);
-    }
+    if (!r.now) await this.deps.runtime.sendKeys(pane, ["Escape"]);
     // Up once its input box has held still a moment: a TUI just started
     // takes a slash command typed before then as text.
     const adapter = this.adapter("claude");
@@ -4281,9 +4277,9 @@ export class Fleet extends EventEmitter {
   // ------------------------------------------------------ side questions
 
   /**
-   * Ask Claude a side question (/btw) in its pane (src/core/btw.ts). Returns
-   * at once with the question recorded as asking; the answer, or why there is
-   * none, follows as a `btw` event.
+   * Ask Claude a side question (/btw): in its pane (src/core/btw.ts), or,
+   * headless, of its host. Returns at once with the question recorded as
+   * asking; the answer, or why there is none, follows as a `btw` event.
    */
   askBtw(id: string, question: string, attempt?: () => void): Btw {
     const s = this.get(id);
@@ -4295,11 +4291,18 @@ export class Fleet extends EventEmitter {
     attempt?.();
     const row = insertBtw({ sessionId: id, question: q, source: "timeline", askedAt: this.now() });
     this.emit("btw", id);
-    const asked = this.serial(id, async () => {
+    // Headless, its host answers from a fork (`claude-host.ts`), turn or no
+    // turn, typing nothing: nothing to queue behind.
+    const hosted = existsSync(hostSocket(id))
+      ? askHost(id, { op: "btw", question: q }, 300_000).then((r) => {
+          if (r?.answer) return r.answer;
+          throw new Error(r?.error ?? "its host went away before it answered");
+        })
+      : null;
+    const asked = hosted ?? this.serial(id, async () => {
       const pane = this.get(id).tmux;
       if (!pane) throw new Error("it stopped before the question was asked");
       const rt = this.deps.runtime;
-      await this.toTui(id, pane, false);
       await this.clearBtw(id, pane);
       await this.typeInto(id, this.get(id).provider, pane, `/btw ${q}`);
       try {
