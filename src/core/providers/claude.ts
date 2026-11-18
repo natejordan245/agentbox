@@ -569,6 +569,9 @@ const HOOKED = [
   }),
 ];
 
+/** The argv of the CLI a pane runs, past `claude-host.ts` when it hosts one. */
+export const withoutHost = (argv: string[]): string[] => (basename(argv[1] ?? "") === "claude-host.ts" ? argv.slice(2) : argv);
+
 /** The control socket of an agentbox session's `claude-host.ts`. */
 export const hostSocket = (session: string): string => join(agentboxHome(), "sessions", session, "host.sock");
 

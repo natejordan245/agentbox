@@ -144,7 +144,7 @@ import { isAgentSent, PROMPT_PREVIEW, withoutNotes } from "./sent";
 import { parentModelFor, parentModelNow } from "./subagent-models";
 import { encodeParent, PARENT_ENV, type ParentModel } from "../subagents/parent";
 import { readBtwPanel } from "./providers/claude-btw";
-import { askHost, hostSocket } from "./providers/claude";
+import { askHost, hostSocket, withoutHost } from "./providers/claude";
 import { briefing } from "./providers/briefing";
 import { sessionText } from "./textfile";
 import type { RewindGoal } from "./providers/claude-rewind";
@@ -1779,8 +1779,9 @@ export class Fleet extends EventEmitter {
     const agents: { pid: number; team: string | null; name: string | null; sessionId: string | null; started: number }[] = [];
     for (const pane of panes) {
       if (pane.dead) continue;
-      const argv = argvOf(pane.pid);
-      if (!argv) continue; // exited since the listing
+      const shown = argvOf(pane.pid);
+      if (!shown) continue; // exited since the listing
+      const argv = withoutHost(shown);
       if (!runsCli(argv, v.provider)) return `a pane runs ${basename(argv[0] ?? "?")}, not ${v.provider}`;
       const started = startedAtOf(pane.pid);
       if (started !== null && now - started < idleMs) return `started ${minutes(now - started)} ago`;
@@ -2499,8 +2500,9 @@ export class Fleet extends EventEmitter {
       status = "closed";
     }
     // So is a scripted one-shot (`claude -p`) once it ends: what ran it took
-    // its answer, and nothing on the board is waiting for it.
-    else if (f?.headless && host === "none" && !this.holding.has(rec.id)) status = "closed";
+    // its answer, and nothing on the board is waiting for it. One agentbox
+    // launched is a session it runs headless (`claude-host.ts`), not one.
+    else if (f?.headless && rec.origin !== "agentbox" && host === "none" && !this.holding.has(rec.id)) status = "closed";
 
     const cwd = f?.cwd || rec.cwd;
     const lastActivityAt = f?.lastActivityAt ?? rec.lastActivityAt;

@@ -1536,7 +1536,7 @@ const DEFAULT_SETTINGS: AgentSettings = {
   hideSteps: "always",
   boardDays: 7,
   autoApprove: true,
-  claudeHeadless: false,
+  claudeHeadless: true,
   parkIdleMin: 60,
   reclaimNightly: false,
   models: { claude: "", codex: "", devin: "", omp: "", opencode: "", muse: "", dsmin: "" },
