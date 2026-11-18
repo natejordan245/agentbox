@@ -994,6 +994,11 @@ export interface AgentSettings {
   boardDays: number;
   /** Skip permission prompts (each provider's bypass flag). */
   autoApprove: boolean;
+  /** Run Claude sessions that skip permission prompts headless, under
+   *  `claude-host.ts`, instead of in Claude's full-screen TUI: a fraction of
+   *  the CPU, and the TUI comes back for an attached terminal, a rewind or a
+   *  /btw. */
+  claudeHeadless: boolean;
   /** Stop a Claude session's process after this many minutes idle with
    *  nothing holding it up (src/core/park.ts); 0 never does. */
   parkIdleMin: number;

@@ -288,6 +288,17 @@ function General({ settings, save, saveStateOf }: SectionProps) {
           <Icon.alert size={15} /> New sessions edit files and run commands without asking.
         </p>
       )}
+      {settings.autoApprove && (
+        <>
+          <ToggleRow
+            label="Run Claude headless"
+            checked={settings.claudeHeadless}
+            onChange={(v) => save("claudeHeadless", { claudeHeadless: v })}
+          />
+          <SaveMark state={saveStateOf("claudeHeadless")} />
+          <p className="hint">A fraction of the CPU of Claude's own screen. A terminal attached, a rewind or a /btw brings that screen back once no turn is running.</p>
+        </>
+      )}
     </section>
   );
 }

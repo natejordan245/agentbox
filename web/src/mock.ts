@@ -74,6 +74,7 @@ const settings: AgentSettings = {
   hideSteps: "always",
   boardDays: 7,
   autoApprove: false,
+  claudeHeadless: true,
   parkIdleMin: 60,
   reclaimNightly: false,
   models: { claude: "claude-fable-5-1", codex: "gpt-5.4-codex", devin: "", omp: "", opencode: "", muse: "", dsmin: "" },

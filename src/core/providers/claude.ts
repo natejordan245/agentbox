@@ -21,11 +21,12 @@
  * stale file for a recycled pid detectable.
  */
 
-import { appendFileSync, existsSync, readdirSync, readFileSync, readlinkSync, statSync, writeFileSync } from "node:fs";
+import { appendFileSync, existsSync, mkdirSync, readdirSync, readFileSync, readlinkSync, statSync, writeFileSync } from "node:fs";
+import { createConnection } from "node:net";
 import { basename, dirname, join, relative, resolve } from "node:path";
 import { moveInto } from "./move";
 import { randomUUID } from "node:crypto";
-import { packageRoot, userHome } from "../paths";
+import { agentboxHome, packageRoot, userHome } from "../paths";
 import { cliVersion } from "./cli-version";
 import type { Account, PromptMenu } from "../types";
 import { JsonlTranscriptReader } from "./jsonl-reader";
@@ -568,6 +569,55 @@ const HOOKED = [
   }),
 ];
 
+/** The control socket of an agentbox session's `claude-host.ts`. */
+export const hostSocket = (session: string): string => join(agentboxHome(), "sessions", session, "host.sock");
+
+/**
+ * A launch that skips permission prompts, run headless under `claude-host.ts`
+ * when asked: the full-screen TUI spends several times the CPU of the
+ * headless CLI drawing a screen nobody watches. One that asks permission
+ * stays in the TUI, whose prompts the fleet reads off its screen.
+ */
+function hosting(cmd: Command, session: string, hosted: boolean | undefined): Command {
+  if (!hosted || !cmd.argv.includes("--dangerously-skip-permissions")) return cmd;
+  const sock = hostSocket(session);
+  mkdirSync(dirname(sock), { recursive: true });
+  return { ...cmd, argv: [process.execPath, join(packageRoot, "src", "core", "providers", "claude-host.ts"), ...cmd.argv], env: { ...cmd.env, AGENTBOX_CLAUDE_HOST: sock } };
+}
+
+/**
+ * One request to a session's host (`claude-host.ts` says which), and its
+ * reply. Null when the session is not hosted, or its host is gone.
+ */
+export function askHost(session: string, req: Record<string, unknown>): Promise<{ ok?: boolean; now?: boolean; error?: string } | null> {
+  const sock = hostSocket(session);
+  if (!existsSync(sock)) return Promise.resolve(null);
+  return new Promise((done) => {
+    let buf = "";
+    const c = createConnection(sock);
+    const end = (v: any) => {
+      clearTimeout(timer);
+      c.destroy();
+      done(v);
+    };
+    const timer = setTimeout(() => end(null), 5_000);
+    c.setEncoding("utf8");
+    c.on("connect", () => c.write(`${JSON.stringify(req)}\n`));
+    c.on("data", (d: string) => {
+      buf += d;
+      const nl = buf.indexOf("\n");
+      if (nl < 0) return;
+      try {
+        end(JSON.parse(buf.slice(0, nl)));
+      } catch {
+        end(null);
+      }
+    });
+    c.on("error", () => end(null));
+    c.on("close", () => end(null));
+  });
+}
+
 /** Claude reads its first prompt from stdin, so the file is fed to it there:
  *  the words stay off the command line. */
 function spawnCommand(opts: SpawnOptions): Command & { agentSessionId: string | null } {
@@ -577,7 +627,7 @@ function spawnCommand(opts: SpawnOptions): Command & { agentSessionId: string | 
   if (opts.effort) argv.push("--effort", opts.effort);
   if (opts.autoApprove) argv.push("--dangerously-skip-permissions");
   argv.push(...THINKING, ...told(opts.briefingFile), ...HOOKED);
-  return { argv, ...accountCommand(opts.account), agentSessionId: id, stdinFile: opts.promptFile };
+  return { ...hosting({ argv, ...accountCommand(opts.account) }, opts.session, opts.hosted), agentSessionId: id, stdinFile: opts.promptFile };
 }
 
 function resumeCommand(opts: ResumeOptions): Command {
@@ -598,7 +648,7 @@ function resumeCommand(opts: ResumeOptions): Command {
     if (opts.autoApprove) argv.push("--dangerously-skip-permissions");
     argv.push(...THINKING, ...told(opts.briefingFile), ...HOOKED);
   }
-  return { argv, ...accountCommand(opts.account), stdinFile: opts.promptFile };
+  return { ...hosting({ argv, ...accountCommand(opts.account) }, opts.session, opts.hosted), stdinFile: opts.promptFile };
 }
 
 /**

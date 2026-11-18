@@ -314,6 +314,8 @@ export interface SpawnOptions {
   /** It may read but not write or run anything that changes the machine
    *  (`ProviderAdapter.readOnly` says whether the CLI can). */
   readOnly?: boolean;
+  /** Run it headless where the CLI can be (claude: `claude-host.ts`). */
+  hosted?: boolean;
 }
 
 export interface ResumeOptions {
@@ -335,6 +337,8 @@ export interface ResumeOptions {
    *  session keeps the permissions it was started with, whatever
    *  `autoApprove` says. */
   carry?: string[];
+  /** See `SpawnOptions.hosted`. */
+  hosted?: boolean;
 }
 
 export interface Command {

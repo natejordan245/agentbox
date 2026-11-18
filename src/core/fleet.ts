@@ -144,6 +144,7 @@ import { isAgentSent, PROMPT_PREVIEW, withoutNotes } from "./sent";
 import { parentModelFor, parentModelNow } from "./subagent-models";
 import { encodeParent, PARENT_ENV, type ParentModel } from "../subagents/parent";
 import { readBtwPanel } from "./providers/claude-btw";
+import { askHost, hostSocket } from "./providers/claude";
 import { briefing } from "./providers/briefing";
 import { sessionText } from "./textfile";
 import type { RewindGoal } from "./providers/claude-rewind";
@@ -471,6 +472,8 @@ export class Fleet extends EventEmitter {
   private typed = new Map<string, string>();
   /** Side questions asked in the terminal whose answer is being waited for, by session. */
   private btwWatching = new Map<string, Promise<void>>();
+  /** Headless Claude sessions asked for their TUI for a terminal attached. */
+  private tuiAsked = new Set<string>();
   private btwHistory = new BtwHistory();
   /** Side questions taken back while asking: their watcher's answer is not recorded. */
   private btwDismissed = new Set<number>();
@@ -749,6 +752,7 @@ export class Fleet extends EventEmitter {
     this.reapDeadPanes(now);
     this.reapParked(now);
     await this.answerStartUps(now);
+    this.tuiForTerminals();
     this.rebuildViews(since, now);
     lap("views");
     // A frozen session looks hung and idle: nothing is parked or nudged
@@ -3194,7 +3198,7 @@ export class Fleet extends EventEmitter {
     // The prompt and the briefing go in files the launch names: a command
     // line holds them, and `pgrep -f` reads command lines.
     const text = sessionText(id, briefing(cwd), adapter.promptDelivery === "file" ? req.prompt || undefined : undefined);
-    const launched = adapter.spawnCommand({ session: id, account, cwd, promptFile: text.prompt, briefingFile: text.briefing, model, effort, autoApprove: settings.autoApprove, readOnly: req.readOnly });
+    const launched = adapter.spawnCommand({ session: id, account, cwd, promptFile: text.prompt, briefingFile: text.briefing, model, effort, autoApprove: settings.autoApprove, hosted: settings.claudeHeadless, readOnly: req.readOnly });
     const cmd = req.readOnly ? launched : withGlobalMcp(req.provider, account, launched, [], cwd);
     const now = this.now();
     const name = tmuxName(id);
@@ -3647,6 +3651,7 @@ export class Fleet extends EventEmitter {
       ...(rec.effort ? { effort: rec.effort } : {}),
       ...(resumeOn(rec) ? { model: resumeOn(rec)! } : {}),
       autoApprove: getSettings().autoApprove,
+      hosted: getSettings().claudeHeadless,
       ...(launch ? { carry: launch.args } : {}),
     };
     const resumed = adapter.resumeCommand(opts);
@@ -3989,6 +3994,12 @@ export class Fleet extends EventEmitter {
       const step = this.adapter(s.provider).answerStep;
       if (!step) throw new FleetError(409, `${s.provider} questions cannot be answered from here`);
       checkAnswers(open.questions, answers);
+      const hosted = s.provider === "claude" ? await askHost(id, { op: "answer", answers }) : null;
+      if (hosted) {
+        if (hosted.error) throw new FleetError(409, hosted.error);
+        this.touched.set(id, this.now());
+        return;
+      }
 
       const pane = s.tmux;
       const rt = this.deps.runtime;
@@ -4050,6 +4061,7 @@ export class Fleet extends EventEmitter {
       const pane = s.tmux ?? getSessionRecord(id)?.tmux;
       if (!pane) throw new FleetError(409, "not running in agentbox");
       if (this.startedAt.has(id)) await this.untilSettled(id, pane);
+      if (s.provider === "claude") await this.toTui(id, pane, true);
       if (s.provider === "claude") await this.clearBtw(id, pane);
       await this.clearLimitDialog(s.provider, pane);
       attempt?.();
@@ -4215,6 +4227,49 @@ export class Fleet extends EventEmitter {
     }
   }
 
+  // ------------------------------------------------------ headless claude
+
+  /**
+   * Hand a headless Claude session's pane to its TUI (`claude-host.ts`) for
+   * what only the TUI's screen does: a rewind, a /btw. With `stopTurn` a
+   * running turn is interrupted first, as the TUI's own rewind does; without,
+   * it is an error, and the TUI comes back when the turn ends. Nothing for a
+   * session in the TUI already.
+   */
+  private async toTui(id: string, pane: string, stopTurn: boolean): Promise<void> {
+    const r = await askHost(id, { op: "tui" });
+    if (!r) return;
+    if (!r.now) {
+      if (!stopTurn) throw new FleetError(409, "it runs headless and is mid-turn; its own screen comes back when the turn ends");
+      await this.deps.runtime.sendKeys(pane, ["Escape"]);
+    }
+    const adapter = this.adapter("claude");
+    const deadline = Date.now() + 60_000;
+    while (Date.now() < deadline) {
+      await Bun.sleep(250);
+      if (existsSync(hostSocket(id))) continue;
+      const screen = (await this.deps.runtime.capture(pane)) ?? "";
+      const keys = adapter.autoAnswer?.(screen, { bypassPermissions: true });
+      if (keys) await this.deps.runtime.sendKeys(pane, keys);
+      else if (adapter.rewind?.inputEmpty(screen)) return;
+    }
+    throw new FleetError(409, "its TUI did not come up within a minute; the Terminal tab shows where it stopped");
+  }
+
+  /** A terminal or browser attached to a headless Claude session gets the
+   *  TUI, as soon as no turn runs. */
+  private tuiForTerminals(): void {
+    for (const v of this.views.values()) {
+      if (v.provider !== "claude" || !v.tmux || !(this.panes.get(v.tmux)?.clients ?? 0)) {
+        this.tuiAsked.delete(v.id);
+        continue;
+      }
+      if (this.tuiAsked.has(v.id) || !existsSync(hostSocket(v.id))) continue;
+      this.tuiAsked.add(v.id);
+      void askHost(v.id, { op: "tui" });
+    }
+  }
+
   // ------------------------------------------------------ side questions
 
   /**
@@ -4236,6 +4291,7 @@ export class Fleet extends EventEmitter {
       const pane = this.get(id).tmux;
       if (!pane) throw new Error("it stopped before the question was asked");
       const rt = this.deps.runtime;
+      await this.toTui(id, pane, false);
       await this.clearBtw(id, pane);
       await this.typeInto(id, this.get(id).provider, pane, `/btw ${q}`);
       try {
