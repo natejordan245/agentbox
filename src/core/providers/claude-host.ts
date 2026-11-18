@@ -64,8 +64,10 @@ interface Menu {
 
 let child: ChildProcess | null = null;
 let sessionId: string | null = sessionFromArgv(argv);
-/** Messages sent that no result has answered yet. */
-let pending = 0;
+/** A turn runs: from a message sent, or a turn's init, to its result. A
+ *  message sent mid-turn can join the running turn, so there is no counting
+ *  results against messages. */
+let busy = false;
 let menu: Menu | null = null;
 let wantTui = false;
 let swapping = false;
@@ -121,7 +123,7 @@ function foot(): string[] {
   }
   const lines = draft.split("\n");
   const shown = lines.length > 1 ? `${lines[0]} (+${lines.length - 1} lines)` : lines[0]!;
-  const state = pending > 0 ? " · esc to interrupt" : "";
+  const state = busy ? " · esc to interrupt" : "";
   return [RULE, `❯ ${shown}`, RULE, `  ⏵⏵ bypass permissions on (headless, agentbox)${state}`];
 }
 
@@ -151,13 +153,13 @@ function send(msg: unknown): void {
 function userMessage(text: string): void {
   say(`› ${text}`);
   say("");
-  pending++;
+  busy = true;
   send({ type: "user", message: { role: "user", content: text } });
   paint();
 }
 
 function interrupt(): void {
-  if (pending <= 0) return;
+  if (!busy) return;
   send({ type: "control_request", request_id: `int-${Date.now()}`, request: { subtype: "interrupt" } });
 }
 
@@ -179,7 +181,10 @@ function toolLine(c: any): string {
 function onMessage(m: any): void {
   switch (m.type) {
     case "system":
-      if (m.subtype === "init" && typeof m.session_id === "string") sessionId = m.session_id;
+      if (m.subtype === "init") {
+        busy = true;
+        if (typeof m.session_id === "string") sessionId = m.session_id;
+      }
       else if (m.subtype === "compact_boundary") say("✻ Conversation compacted");
       break;
     case "assistant":
@@ -198,7 +203,7 @@ function onMessage(m: any): void {
       }
       break;
     case "result":
-      pending = Math.max(0, pending - 1);
+      busy = false;
       if (m.is_error) {
         const why = typeof m.result === "string" && m.result ? m.result : (m.errors ?? []).join("; ") || m.subtype;
         if (m.subtype !== "error_during_execution") say(`● ${why}`);
@@ -400,7 +405,7 @@ function listen(): void {
         c.end(`${JSON.stringify(error ? { error } : { ok: true })}\n`);
       } else if (req.op === "tui") {
         wantTui = true;
-        c.end(`${JSON.stringify({ ok: true, now: pending === 0 && !menu })}\n`);
+        c.end(`${JSON.stringify({ ok: true, now: !busy && !menu })}\n`);
         maybeSwap();
       } else c.end(`${JSON.stringify({ error: `no such op: ${req.op}` })}\n`);
     });
@@ -415,7 +420,7 @@ function listen(): void {
  *  exits when it has nothing left to do), then run `claude --resume` on the
  *  terminal and exit with its code. */
 function maybeSwap(): void {
-  if (!wantTui || swapping || pending > 0 || menu || !sessionId) return;
+  if (!wantTui || swapping || busy || menu || !sessionId) return;
   swapping = true;
   closeServer();
   kb.removeAllListeners("data");
