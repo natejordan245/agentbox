@@ -4243,15 +4243,21 @@ export class Fleet extends EventEmitter {
       if (!stopTurn) throw new FleetError(409, "it runs headless and is mid-turn; its own screen comes back when the turn ends");
       await this.deps.runtime.sendKeys(pane, ["Escape"]);
     }
+    // Up once its input box has held still a moment: a TUI just started
+    // takes a slash command typed before then as text.
     const adapter = this.adapter("claude");
     const deadline = Date.now() + 60_000;
+    let last = "";
+    let still = 0;
     while (Date.now() < deadline) {
-      await Bun.sleep(250);
+      await Bun.sleep(500);
       if (existsSync(hostSocket(id))) continue;
       const screen = (await this.deps.runtime.capture(pane)) ?? "";
       const keys = adapter.autoAnswer?.(screen, { bypassPermissions: true });
       if (keys) await this.deps.runtime.sendKeys(pane, keys);
-      else if (adapter.rewind?.inputEmpty(screen)) return;
+      still = !keys && adapter.rewind?.inputEmpty(screen) && screen === last ? still + 1 : 0;
+      if (still >= 4) return;
+      last = screen;
     }
     throw new FleetError(409, "its TUI did not come up within a minute; the Terminal tab shows where it stopped");
   }
