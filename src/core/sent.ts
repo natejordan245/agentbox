@@ -74,6 +74,9 @@ export function readSent(raw: string): Sent {
   const text = unwrapPaste(raw);
   if (FLEET_NOTE.test(text)) return { agent: true, from: "agentbox", via: null, text: text.trim() };
   const signed = withoutNotes(text);
+  // A note still in what is left was never yours either: typed into a box
+  // that held leftover text, cut short, or quoting a log with a `]` in it.
+  if (signed.includes("[agentbox: ")) return { agent: true, from: "agentbox", via: null, text: text.trim() };
   // The notes stay in what is shown; only the mark comes out.
   const notes = text.slice(0, text.length - signed.length).trim();
   const shown = (rest: string): string => [notes, rest.trim()].filter(Boolean).join("\n\n");
