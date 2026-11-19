@@ -94,6 +94,7 @@ import { builtEntry, fileResponse, notBuiltPage, resolveStatic } from "./static"
 import { cpuProfile, held, stampLogs, watchLoop } from "./vitals";
 import { adapters } from "../core/providers";
 import { sendAsAgent } from "../core/sendguard";
+import { cleanSwears } from "../core/swears";
 import { SendReceiptConflict, sendReceipt, submitWithReceipt } from "../core/send-receipts";
 import { AccountError, AccountsService, owners } from "../core/accounts";
 import { burnOf } from "../core/accounts/usage";
@@ -958,7 +959,7 @@ const router = new Router(mapError)
       if (typeof b.repo === "string" && b.repo && !named) throw new HttpError(404, `no repo ${b.repo} is registered here`);
       const callerPid = typeof b.callerPid === "number" && Number.isInteger(b.callerPid) && b.callerPid > 1 ? b.callerPid : undefined;
       const into = b.into !== undefined ? await intoPlace(b, callerPid, byYou(req, b)) : null;
-      const prompt = typeof b.prompt === "string" && b.prompt ? b.prompt : undefined;
+      const prompt = typeof b.prompt === "string" && b.prompt ? cleanSwears(b.prompt) : undefined;
       const asked = {
         provider: provider(b.provider),
         readOnly: b.readOnly === true,
@@ -1135,17 +1136,19 @@ const router = new Router(mapError)
       }
       return json(sent);
     }
+    // Yours: its swears are swapped for mild words (src/core/swears.ts).
+    const yours = cleanSwears(text);
     if (b.sendId !== undefined) {
       const id = requireString(b, "sendId");
       if (!/^[\w-]{1,64}$/.test(id)) throw new HttpError(400, "invalid send ID");
       try {
-        return json(await submitWithReceipt(params.id!, id, "send", text, (attempt) => fleet.send(params.id!, text, attempt)));
+        return json(await submitWithReceipt(params.id!, id, "send", yours, (attempt) => fleet.send(params.id!, yours, attempt)));
       } catch (e) {
         if (e instanceof SendReceiptConflict) throw new HttpError(409, e.message);
         throw e;
       }
     }
-    await fleet.send(params.id!, text);
+    await fleet.send(params.id!, yours);
     return json(null);
   })
   .add("POST", "/api/sessions/:id/submissions", async ({ req, params }) => {
@@ -1154,7 +1157,7 @@ const router = new Router(mapError)
     if (!/^[\w-]{1,64}$/.test(id)) throw new HttpError(400, "invalid send ID");
     const kind = requireString(b, "kind");
     if (!["send", "resume", "btw"].includes(kind)) throw new HttpError(400, "invalid submission kind");
-    const text = typeof b.text === "string" ? b.text : requireString(b, "text");
+    const text = cleanSwears(typeof b.text === "string" ? b.text : requireString(b, "text"));
     if (kind !== "resume" && !text.trim()) throw new HttpError(400, "the message is empty");
     try {
       const receipt = await submitWithReceipt(params.id!, id, kind, text, (attempt) => {
@@ -1172,7 +1175,7 @@ const router = new Router(mapError)
   .add("POST", "/api/sessions/:id/edit", async ({ req, params }) => {
     const b = await readBody(req);
     const turnId = requireString(b, "turnId");
-    const text = requireString(b, "text");
+    const text = cleanSwears(requireString(b, "text"));
     if (!text.trim()) throw new HttpError(400, "the message is empty");
     const mode = b.mode ?? "send";
     if (mode !== "send" && mode !== "code" && mode !== "fork") throw new HttpError(400, "mode is send, code or fork");
@@ -1223,7 +1226,7 @@ const router = new Router(mapError)
   })
   .add("POST", "/api/sessions/:id/btw", async ({ req, params }) => {
     const b = await readBody(req);
-    return json(fleet.askBtw(params.id!, requireString(b, "question")), 201);
+    return json(fleet.askBtw(params.id!, cleanSwears(requireString(b, "question"))), 201);
   })
   .add("POST", "/api/sessions/:id/btw/:row/dismiss", ({ params }) => {
     const row = Number(params.row);
@@ -1246,7 +1249,7 @@ const router = new Router(mapError)
   })
   .add("POST", "/api/sessions/:id/resume", async ({ req, params }) => {
     const b = await readBody(req);
-    const s = await fleet.resume(params.id!, typeof b.prompt === "string" ? b.prompt : undefined);
+    const s = await fleet.resume(params.id!, typeof b.prompt === "string" ? cleanSwears(b.prompt) : undefined);
     scheduleHot();
     return json(s);
   })
