@@ -219,7 +219,7 @@ export async function show(api: Api, args: string[]): Promise<number> {
       ["provider", `${x.provider}${x.model ? ` · ${x.model}` : ""}`],
       ["account", x.accountId ? acct.get(x.accountId) ?? x.accountId : null],
       // Stopped there until moved (`agentbox move`) or the limit lifts.
-      ["limit", x.limitHit ? `${x.limitHit.detail}${x.limitHit.hopped ? " — agentbox has moved it once already" : ""}` : null],
+      ["limit", x.limitHit ? `${x.limitHit.detail}${x.limitHit.hopped ? " — agentbox moved it once today already" : ""}` : null],
       ["cwd", x.cwd],
       ["branch", x.branch],
       ["worktree", x.worktree],

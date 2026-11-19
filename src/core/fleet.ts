@@ -860,7 +860,7 @@ export class Fleet extends EventEmitter {
       if (v.status !== "waiting" || v.host !== "tmux" || this.busy.has(v.id)) continue;
       const rec = getSessionRecord(v.id);
       if (!rec?.accountId) continue;
-      const next = rec.hoppedAt || this.modelWide(v, now) ? null : this.hopTarget(rec, v);
+      const next = hoppedRecently(rec, now) || this.modelWide(v, now) ? null : this.hopTarget(rec, v);
       // Another is on its way over: this one is looked at again once it has landed.
       if (next && this.hopping) continue;
       this.stallsSeen.set(v.id, hit.at);
@@ -895,7 +895,7 @@ export class Fleet extends EventEmitter {
 
   private hop(v: Session, to: Candidate, now: number): void {
     this.hopping = true;
-    console.log(`agentbox: ${v.id} (${v.title}) stopped at its account's limit (${oneLine(v.limitHit!.detail, 80)}); moving it to ${to.label}, its one move`);
+    console.log(`agentbox: ${v.id} (${v.title}) stopped at its account's limit (${oneLine(v.limitHit!.detail, 80)}); moving it to ${to.label}, its move for the day`);
     void this.moveAndContinue(v.id, {
       accountId: to.accountId,
       prompt: "[agentbox: limits have reset, carry on where you left off]",
@@ -2513,7 +2513,7 @@ export class Fleet extends EventEmitter {
     const end = hit ? this.limitEnd(rec.accountId, hit, now) : null;
     if (!hit || end !== "lifted") this.lifted.delete(rec.id);
     else if (this.lifted.get(rec.id)?.hitAt !== hit.at) this.lifted.set(rec.id, { hitAt: hit.at, since: now });
-    const limitHit = hit && end !== "lifted" ? { ...hit, until: end, ...(rec.hoppedAt ? { hopped: true as const } : {}) } : null;
+    const limitHit = hit && end !== "lifted" ? { ...hit, until: end, ...(hoppedRecently(rec, now) ? { hopped: true as const } : {}) } : null;
     const warmUntil = cacheWarmUntil(f, lastActivityAt, this.coldAfterMs);
     const cold =
       this.movable.has(rec.provider) &&
@@ -4623,6 +4623,12 @@ export class Fleet extends EventEmitter {
  *  5-hour window's length, the longest a 5-hour limit lasts. One that lifts
  *  later is old work, and yours to pick up or leave. */
 const CARRY_ON_WITHIN_MS = 5 * 60 * 60_000;
+/** A session stopped at its account's limit is moved by the fleet at most
+ *  once in this long (`sessions.hopped_at`): a runaway cannot run through
+ *  every account, and one that lives for days still gets its move when it
+ *  meets a limit again on the account it went to. */
+const HOP_EVERY_MS = 24 * 60 * 60_000;
+const hoppedRecently = (rec: SessionRecord, now: number): boolean => !!rec.hoppedAt && now - rec.hoppedAt < HOP_EVERY_MS;
 /** Limits on one model from two accounts this close together are the model's. */
 const MODEL_WIDE_WITHIN_MS = 15 * 60_000;
 /** A turn error older than this is not retried on its own: it stalled before

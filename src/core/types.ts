@@ -663,8 +663,8 @@ export interface Session {
      *  message is refused the same way, so nothing is sent (the fleet's own
      *  nudges, and `agentbox send` from an agent). Null when nothing says. */
     until?: number | null;
-    /** The fleet already moved it off an account at its limit once
-     *  (`Fleet.continueStalled`), so from here a move is yours. */
+    /** The fleet moved it off an account at its limit within the last day
+     *  (`Fleet.continueStalled`), so until then a move is yours. */
     hopped?: true;
   } | null;
   /**

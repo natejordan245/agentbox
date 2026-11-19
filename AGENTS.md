@@ -116,8 +116,8 @@ edits unstaged.
   copies — a transcript that lives in the account's home: claude and codex;
   omp, opencode and devin keep one store across accounts, and muse has no
   move at all).
-  The one exception: a session stopped at its account's limit is moved once
-  in its life to an account that can take it (`Fleet.continueStalled`);
+  The one exception: a session stopped at its account's limit is moved at most
+  once a day to an account that can take it (`Fleet.continueStalled`);
   after that the UI offers a button. Transcripts are not shared between account homes, so a plain
   `claude --resume` cannot cross accounts.
 - **Never kill before proving the resume.** Adopt checks the transcript exists

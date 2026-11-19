@@ -493,8 +493,8 @@ sessions (ids first on every line; verbs taking ids read them from stdin with -)
   resume|adopt <id>... [--detach]   one id on a terminal attaches; --detach or many do not
   move <id> [--account NAME] [--force] [text…]
                         continue it on another account, conversation and all: for one
-                        stopped at its account's limit (agentbox moves each once by
-                        itself). The account with room unless named; refused when
+                        stopped at its account's limit (agentbox moves each once a
+                        day by itself). The account with room unless named; refused when
                         none can take it, or it is warm and not at a limit (--force)
   label <id> [name]     rename it on the board (no name clears)
   recover [--last | --dry-run] [<id>...]

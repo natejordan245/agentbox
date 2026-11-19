@@ -110,7 +110,7 @@ why). Arming the same wait twice is one wait.
     agentbox resume <id>... --detach
     agentbox move <id> [--account X]   # continue it on another account, its conversation intact:
                                     # for one stopped at its account's usage limit (show has a
-                                    # "limit:" line; agentbox moves each once by itself, so this is
+                                    # "limit:" line; agentbox moves each once a day by itself, so this is
                                     # for the second time, or the one it missed). Cheaper than
                                     # a successor that rebuilds the context from the log.
                                     # Refused when no other account can take it
