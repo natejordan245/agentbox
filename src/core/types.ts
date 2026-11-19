@@ -313,16 +313,20 @@ export interface Candidate {
     runsOutAt: number | null;
   } | null;
   /** Weekly points left of `budget` per hour until it resets, or until the
-   *  subscription ends (`endsAt`) when that is first. */
+   *  subscription ends (`endsAt`) when that is first: what it takes to lose
+   *  none of it. An ending subscription counts a week for each reset it
+   *  holds for its whole week, since those end with it. */
   perHour: number | null;
   /** `Account.endsAt`: the budget is lost then, if before it resets. */
   endsAt?: number | null;
-  /** The model being started has a weekly of its own here that is not used
-   *  up, and the account holds a reset for it (Claude's "Fable reset", which
-   *  refills it and hands back what Fable used of the week): that weekly's
-   *  percent `used`, and the hours until the account's week resets. These
-   *  accounts take the model's sessions first: the most used, then the
-   *  longest until the reset. Null otherwise. */
+  /** A limit worth running this account down to, for the reset it holds:
+   *  the model being started has a weekly of its own here that is not used
+   *  up, with a reset held for it (Claude's "Fable reset", which refills it
+   *  and hands back what Fable used of the week); or its subscription is
+   *  ending and it holds a reset for its whole week, not used up. That
+   *  limit's percent `used`, and the hours until the account's week resets.
+   *  These accounts take sessions first: the most used, then the longest
+   *  until the reset. Null otherwise. */
   refill?: { label: string; used: number; hoursLeft: number } | null;
   /** How many of each window's points one weekly point is here (rates.ts),
    *  by window id: what claims were turned into each window's points with. */

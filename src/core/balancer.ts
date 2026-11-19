@@ -65,6 +65,13 @@
  * weekly used already, then the one whose week resets last. One account at a
  * time is run down to its limit, starting with the most week to spare, and
  * it is not left half used when another account's week turns over.
+ *
+ * The same goes for the resets an ending subscription holds for its whole
+ * week (`WEEK_RESETS`): they end with it, and one is only worth spending on
+ * a week that is used up, with time left to use it again. In due order an
+ * account reaches its limit as its week runs out, when a reset buys nothing,
+ * so such an account is run down first, whatever the model, and what it has
+ * to spend by then counts a week for each reset.
  */
 
 import { claimFor } from "./claim";
@@ -129,6 +136,9 @@ export interface PlaceRequest {
 const HOUR = 3_600_000;
 const DAY = 24 * HOUR;
 const WEEK = 7 * DAY;
+
+/** The resets that refill an account's whole week (`ResetCredit.resetType`). */
+const WEEK_RESETS = new Set(["weekly", "full", "codex_rate_limits"]);
 
 /** How far back a limit stop can still hold: a week's limit names a reset
  *  up to a week out. */
@@ -322,6 +332,11 @@ function evaluate(
   // The model's own weekly, not used up, with a reset held for it (a reset
   // is named for what it refills: "fable").
   const own = budgets.find((b) => b.w.scope && b.used < 100 && state.resets?.some((r) => r.resetType === b.w.scope!.model.toLowerCase()));
+  // The resets an ending subscription holds for its whole week, and that
+  // week while it is not used up: the limit one of them is spent at.
+  const spare = ends === null ? 0 : (state.resets ?? []).filter((r) => WEEK_RESETS.has(r.resetType)).reduce((n, r) => n + (r.count ?? 1), 0);
+  const last = spare > 0 ? budgets.find((b) => b.w === weekly && b.used < 100) : undefined;
+  const run = own ?? last;
 
   const c: Candidate = {
     accountId: state.account.id,
@@ -340,9 +355,9 @@ function evaluate(
       pace: binding.pace && round1(binding.pace.perHour),
       runsOutAt: binding.runsOutAt,
     },
-    perHour: binding && Math.round((Math.max(0, binding.left) / Math.max(Math.min(hoursLeft(binding.w, now), ends === null ? Infinity : (ends - now) / HOUR), 0.25)) * 1000) / 1000,
+    perHour: binding && Math.round(((Math.max(0, binding.left) + spare * 100) / Math.max(Math.min(hoursLeft(binding.w, now), ends === null ? Infinity : (ends - now) / HOUR), 0.25)) * 1000) / 1000,
     endsAt: ends,
-    refill: own ? { label: own.w.label, used: own.used, hoursLeft: round1(hoursLeft(weekly ?? own.w, now)) } : null,
+    refill: run ? { label: run.w.label, used: run.used, hoursLeft: round1(hoursLeft(weekly ?? run.w, now)) } : null,
     perWeekly,
     short: null,
     shortEffective: null,
@@ -472,7 +487,7 @@ const endsFirst = (c: Candidate, now: number): boolean => c.endsAt != null && du
 /**
  * The ordering. First, whether the account has room for this session
  * (`fits`): one without would put it at risk of stopping mid-work. Among
- * those that have room, the ones holding a reset for the model's own weekly
+ * those that have room, the ones holding a reset to run down to
  * (`Candidate.refill`), the most of it used first, then the longest until
  * the week resets; then the one whose budget is lost soonest (`due`) — what expires first is spent first — then the
  * most of it left per hour until then. Among
@@ -614,10 +629,10 @@ function explain(chosen: Candidate, eligible: Candidate[], now: number, unmetere
   }
   const r = chosen.refill;
   if (r) {
-    const what = `${chosen.label} holds a reset for its ${r.label.toLowerCase()}`;
+    const what = `${chosen.label} holds a reset for its ${r.label.toLowerCase()}${chosen.endsAt != null ? ", lost when its subscription ends" : ""}`;
     const room = "and it has room in its 5-hour window";
     const n = next.refill;
-    if (!n) return `${what} (${r.used}% used; ${next.label} holds none, or has used its up), ${room}`;
+    if (!n) return `${what} (${r.used}% used; ${next.label} holds none to run down to, or has used its up), ${room}`;
     if (r.used > n.used) return `${what} and has used the most of it (${r.used}%; ${next.label} ${n.used}%), ${room}`;
     return `${what}, ${r.used}% used like ${next.label}'s, and its week resets last (in ${Math.round(r.hoursLeft)}h; ${next.label}'s in ${Math.round(n.hoursLeft)}h), ${room}`;
   }
