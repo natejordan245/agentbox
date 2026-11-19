@@ -48,6 +48,11 @@ export interface Account {
   /** Off means the balancer never places a new session here. Existing
    *  sessions pinned to it are unaffected. */
   enabled: boolean;
+  /** When its subscription ends, for one that will not renew. You say so:
+   *  no provider tells a CLI's login that its plan was cancelled. What is
+   *  left of its budget is lost then, so the balancer spends it by then and
+   *  places nothing here after. */
+  endsAt?: number | null;
   createdAt: number;
 }
 
@@ -225,6 +230,10 @@ export interface AccountView extends Account {
   placement: Candidate | null;
   /** Other homes logged in as this login. */
   alsoAt: { id: string; home: string; isDefault: boolean }[];
+  /** When its subscription began, where the provider says (claude): a
+   *  monthly plan's periods end on that day of each month, which is the
+   *  day to offer for `endsAt`. */
+  subscribedAt?: number | null;
   /** Which sessions may run on it (docs/org.md): yours, the org's, or
    *  both for a login of yours in the org's pool. */
   scopes: Scope[];
@@ -303,8 +312,11 @@ export interface Candidate {
     pace: number | null;
     runsOutAt: number | null;
   } | null;
-  /** Weekly points left of `budget` per hour until it resets. */
+  /** Weekly points left of `budget` per hour until it resets, or until the
+   *  subscription ends (`endsAt`) when that is first. */
   perHour: number | null;
+  /** `Account.endsAt`: the budget is lost then, if before it resets. */
+  endsAt?: number | null;
   /** The model being started has a weekly of its own here that is not used
    *  up, and the account holds a reset for it (Claude's "Fable reset", which
    *  refills it and hands back what Fable used of the week): that weekly's

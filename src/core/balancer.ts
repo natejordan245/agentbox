@@ -26,6 +26,12 @@
  * whenever there is less work than budget, and the one about to reset loses
  * its share for good.
  *
+ * A subscription that will not renew (`Account.endsAt`) loses whatever is
+ * left of its budget when it ends, so that end stands for the budget's reset
+ * wherever it comes first: the account is spent ahead of the ones whose
+ * budgets outlast it, loaded as far as it takes to finish by then, and takes
+ * nothing once it is over.
+ *
  * "Room" is therefore a line, not the whole window: an account is loaded
  * until its 5-hour window is forecast `shortLoadPct` full (half), and the
  * next session goes to the next account to reset. The other half is the
@@ -77,7 +83,7 @@ import type {
 } from "./types";
 
 export interface AccountState {
-  account: Pick<Account, "id" | "label" | "enabled">;
+  account: Pick<Account, "id" | "label" | "enabled" | "endsAt">;
   windows: UsageWindow[];
   /** Readings of its windows over the last hour and a half, oldest first. */
   samples?: { windowId: string; at: number; usedPct: number; resetsAt: number | null }[];
@@ -295,6 +301,7 @@ function evaluate(
   const outstanding = state.claims.reduce((a, c) => a + c.outstanding, 0);
   const weekly = weeklyWindow(state.windows);
   const short = shortWindow(state.windows);
+  const ends = state.account.endsAt ?? null;
   const perWeekly = Object.fromEntries(state.windows.map((w) => [w.id, state.perWeekly?.[w.id] ?? coldPerWeekly(w)]));
   // Every window's measured pace, and the claims it has not seen yet (in
   // weekly points): sessions too new for the pace to have measured.
@@ -333,7 +340,8 @@ function evaluate(
       pace: binding.pace && round1(binding.pace.perHour),
       runsOutAt: binding.runsOutAt,
     },
-    perHour: binding && Math.round((Math.max(0, binding.left) / Math.max(hoursLeft(binding.w, now), 0.25)) * 1000) / 1000,
+    perHour: binding && Math.round((Math.max(0, binding.left) / Math.max(Math.min(hoursLeft(binding.w, now), ends === null ? Infinity : (ends - now) / HOUR), 0.25)) * 1000) / 1000,
+    endsAt: ends,
     refill: own ? { label: own.w.label, used: own.used, hoursLeft: round1(hoursLeft(weekly ?? own.w, now)) } : null,
     perWeekly,
     short: null,
@@ -402,6 +410,10 @@ function evaluate(
     c.eligible = false;
     c.wall = true;
     c.reason = state.auth === "missing" ? "not logged in" : "its login has expired: log in again";
+  } else if (ends !== null && ends <= now) {
+    c.eligible = false;
+    c.wall = true;
+    c.reason = `its subscription ended ${dayOf(ends)}`;
   } else if (state.refused) {
     // Whoever meters it: a route that answers nothing runs nothing.
     const r = state.refused;
@@ -445,19 +457,24 @@ function fits(c: Candidate): boolean {
   return c.shortLoadTo === null ? c.legRoom >= need : 100 - c.legRoom + need <= c.shortLoadTo;
 }
 
-/** When its budget resets, for ordering. One that has not started, or has
- *  reset since its last reading, loses nothing by waiting: last. */
+/** When what is left of its budget is lost, for ordering: at the budget's
+ *  reset, or when its subscription ends, if that is first. A budget that has
+ *  not started, or has reset since its last reading, loses nothing by
+ *  waiting: last, unless its subscription is ending. */
 function due(c: Candidate, now: number): number {
   const at = c.budget?.resetsAt ?? null;
-  return at !== null && at > now ? at : Infinity;
+  return Math.min(at !== null && at > now ? at : Infinity, c.endsAt ?? Infinity);
 }
+
+/** Its subscription ends before its budget resets. */
+const endsFirst = (c: Candidate, now: number): boolean => c.endsAt != null && due(c, now) === c.endsAt;
 
 /**
  * The ordering. First, whether the account has room for this session
  * (`fits`): one without would put it at risk of stopping mid-work. Among
  * those that have room, the ones holding a reset for the model's own weekly
  * (`Candidate.refill`), the most of it used first, then the longest until
- * the week resets; then the one whose budget resets soonest — what expires first is spent first — then the
+ * the week resets; then the one whose budget is lost soonest (`due`) — what expires first is spent first — then the
  * most of it left per hour until then. Among
  * those that do not, the most room (the least overrun, below zero), since
  * that is the least likely to stall. Then fewer outstanding claims, then name.
@@ -607,9 +624,14 @@ function explain(chosen: Candidate, eligible: Candidate[], now: number, unmetere
   const b = chosen.budget;
   if (b && due(chosen, now) < due(next, now)) {
     const theirs = next.budget && next.budget.label !== b.label ? ` ${next.budget.label.toLowerCase()}` : "";
-    const other = due(next, now) === Infinity ? `${next.label}'s${theirs} has not started` : `${next.label}'s${theirs} in ${until(due(next, now), now)}`;
+    const other = endsFirst(next, now)
+      ? `${next.label}'s subscription ends in ${until(due(next, now), now)}`
+      : due(next, now) === Infinity
+        ? `${next.label}'s${theirs} has not started`
+        : `${next.label}'s${theirs} in ${until(due(next, now), now)}`;
     const left = b.used >= 100 ? `reading ${b.used}% but with nothing refused yet` : `with ${round1(Math.max(0, 100 - b.effective))}% of it still to use`;
-    return `${chosen.label}'s ${b.label.toLowerCase()} resets soonest (in ${until(due(chosen, now), now)}; ${other}), ${left}, and it has room in its 5-hour window`;
+    const what = endsFirst(chosen, now) ? `${chosen.label}'s ${b.label.toLowerCase()} is lost soonest, when its subscription ends` : `${chosen.label}'s ${b.label.toLowerCase()} resets soonest`;
+    return `${what} (in ${until(due(chosen, now), now)}; ${other}), ${left}, and it has room in its 5-hour window`;
   }
   if (chosen.perHour !== null && next.perHour !== null && chosen.perHour !== next.perHour) {
     const [x, y] = rates(chosen.perHour, next.perHour);

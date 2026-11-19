@@ -38,6 +38,7 @@ export type AccountWithStatus = Account & {
   auth: AccountAuth;
   usage: AccountUsage;
   service: ServiceId | null;
+  subscribedAt: number | null;
 };
 
 export interface AccountsServiceOptions {
@@ -210,11 +211,11 @@ export class AccountsService extends EventEmitter {
     return getAccount(account.id) ?? account;
   }
 
-  update(id: string, patch: { label?: string; enabled?: boolean }): Account {
+  update(id: string, patch: { label?: string; enabled?: boolean; endsAt?: number | null }): Account {
     const a = getAccount(id);
     if (!a) throw new AccountError(404, `no account ${id}`);
     const label = patch.label?.trim();
-    updateAccount(id, { label: label || undefined, enabled: patch.enabled });
+    updateAccount(id, { label: label || undefined, enabled: patch.enabled, endsAt: patch.endsAt });
     this.emit("change");
     return getAccount(id)!;
   }
@@ -309,7 +310,7 @@ export class AccountsService extends EventEmitter {
     // current without waiting for the identity sweep: the cache expires after
     // a minute and this re-reads.
     if (a.provider !== "devin") void this.maybeReidentify(a).catch(() => undefined);
-    return { ...a, auth, usage, service: serviceOf(a)?.id ?? null };
+    return { ...a, auth, usage, service: serviceOf(a)?.id ?? null, subscribedAt: this.identities.peek(a.id)?.subscribedAt ?? null };
   }
 
   private async maybeReidentify(a: Account): Promise<void> {

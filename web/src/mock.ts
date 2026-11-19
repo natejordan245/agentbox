@@ -1730,9 +1730,10 @@ async function handle(method: string, path: string, b: unknown): Promise<unknown
     }
     const a = mustAccount(id);
     if (method === "PATCH") {
-      const x = body<{ label: string; enabled: boolean }>(b);
+      const x = body<{ label: string; enabled: boolean; endsAt: number | null }>(b);
       if (typeof x.label === "string" && x.label.trim()) a.label = x.label.trim();
       if (typeof x.enabled === "boolean") a.enabled = x.enabled;
+      if (x.endsAt !== undefined) a.endsAt = x.endsAt;
     } else if (method === "DELETE") {
       removedAccounts.set(id, { account: a, index: accounts.indexOf(a) });
       accounts.splice(accounts.indexOf(a), 1);

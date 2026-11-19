@@ -376,7 +376,7 @@ export const api = {
   addKeyAccount: (provider: ProviderId, service: string, apiKey: string, label?: string) =>
     post<{ account: Account; login: null }>("/api/accounts", { provider, service, apiKey, ...(label ? { label } : {}) }),
   importAccount: (provider: ProviderId, home: string) => post<Account>("/api/accounts/import", { provider, home }),
-  patchAccount: (id: string, patch: { label?: string; enabled?: boolean; apiKey?: string }) =>
+  patchAccount: (id: string, patch: { label?: string; enabled?: boolean; apiKey?: string; endsAt?: number | null }) =>
     request<Account>("PATCH", `/api/accounts/${enc(id)}`, patch),
   forgetAccount: (id: string) => request<unknown>("DELETE", `/api/accounts/${enc(id)}`),
   /** Undo a forget: the server holds the account for five seconds. */

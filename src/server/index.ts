@@ -1756,6 +1756,8 @@ const router = new Router(mapError)
     const a = accounts.update(params.id!, {
       label: optionalString(b, "label"),
       enabled: typeof b.enabled === "boolean" ? b.enabled : undefined,
+      // A time it ends, or null once it renews after all.
+      endsAt: b.endsAt === null || (typeof b.endsAt === "number" && Number.isFinite(b.endsAt)) ? b.endsAt : undefined,
     });
     scheduleCold();
     return json(a);

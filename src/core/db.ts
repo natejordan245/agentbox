@@ -554,6 +554,9 @@ const MIGRATIONS: readonly string[] = [
   ALTER TABLE cards ADD COLUMN check_seen TEXT;
   ALTER TABLE cards ADD COLUMN check_failures INTEGER NOT NULL DEFAULT 0;
   `,
+  // 48 — when an account's subscription ends, for one that will not renew
+  // (`Account.endsAt`).
+  `ALTER TABLE accounts ADD COLUMN ends_at INTEGER;`,
 ];
 
 function migrate(d: Database) {
@@ -677,15 +680,15 @@ export function getAccount(id: string): Account | null {
 
 export function insertAccount(a: Account): void {
   getDb().run(
-    `INSERT INTO accounts (id,provider,label,email,plan,home,is_default,enabled,created_at)
-     VALUES (?,?,?,?,?,?,?,?,?)`,
-    [a.id, a.provider, a.label, a.email, a.plan, a.home, a.isDefault ? 1 : 0, a.enabled ? 1 : 0, a.createdAt],
+    `INSERT INTO accounts (id,provider,label,email,plan,home,is_default,enabled,ends_at,created_at)
+     VALUES (?,?,?,?,?,?,?,?,?,?)`,
+    [a.id, a.provider, a.label, a.email, a.plan, a.home, a.isDefault ? 1 : 0, a.enabled ? 1 : 0, a.endsAt ?? null, a.createdAt],
   );
 }
 
 export function updateAccount(
   id: string,
-  patch: Partial<Pick<Account, "label" | "email" | "plan" | "enabled">>,
+  patch: Partial<Pick<Account, "label" | "email" | "plan" | "enabled" | "endsAt">>,
 ): void {
   const cols: string[] = [];
   const vals: (string | number | null)[] = [];
@@ -693,6 +696,7 @@ export function updateAccount(
   if (patch.email !== undefined) { cols.push("email = ?"); vals.push(patch.email); }
   if (patch.plan !== undefined) { cols.push("plan = ?"); vals.push(patch.plan); }
   if (patch.enabled !== undefined) { cols.push("enabled = ?"); vals.push(patch.enabled ? 1 : 0); }
+  if (patch.endsAt !== undefined) { cols.push("ends_at = ?"); vals.push(patch.endsAt); }
   if (cols.length === 0) return;
   getDb().run(`UPDATE accounts SET ${cols.join(", ")} WHERE id = ?`, [...vals, id]);
 }

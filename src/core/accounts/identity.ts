@@ -22,6 +22,8 @@ export interface Identity {
   email: string | null;
   plan: string | null;
   auth: AccountAuth;
+  /** When its subscription began (`AccountView.subscribedAt`). */
+  subscribedAt?: number | null;
 }
 
 type AccountRef = Pick<Account, "provider" | "home" | "isDefault">;
@@ -179,10 +181,12 @@ function identifyClaude(account: AccountRef, now = Date.now()): Identity {
   if (!cred) {
     return { email: null, plan: null, auth: { state: "missing", expiresAt: null, detail: "not logged in" } };
   }
+  const subscribed = Date.parse(str(oa?.subscriptionCreatedAt) ?? "");
   return {
     email,
     plan: claudePlan(cred.subscriptionType, cred.rateLimitTier),
     auth: tokenAuth(cred, now),
+    subscribedAt: Number.isFinite(subscribed) ? subscribed : null,
   };
 }
 

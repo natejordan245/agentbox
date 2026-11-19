@@ -266,6 +266,7 @@ function AccountCard({
   const keyed = service(a.service)?.login === "api-key";
   const sharable = !!org && !pooled && ORG_PROVIDERS.includes(a.provider) && (a.shared || a.auth.state === "ok");
   const [rekey, setRekey] = useState(false);
+  const [ending, setEnding] = useState(false);
   const now = useNow(30_000);
   const claims = a.claims;
   const outstanding = outstandingOf(claims);
@@ -373,6 +374,17 @@ function AccountCard({
         ),
       )}
 
+      {a.endsAt != null ? (
+        <p className="ac-twin">
+          <Icon.clock size={12} />
+          <span>
+            {a.endsAt > now ? `Not renewing: its subscription ends ${fmtEnd(a.endsAt)}, in ${fmtCountdown(a.endsAt - now)}.` : `Its subscription ended ${fmtEnd(a.endsAt)}.`}{" "}
+            <button className="linkish" disabled={busy} onClick={() => setEnding(true)}>
+              Change
+            </button>
+          </span>
+        </p>
+      ) : null}
       {a.auth.detail && a.auth.state !== "ok" ? <p className="ac-auth-detail">{a.auth.detail}</p> : null}
       {a.isDefault && a.email ? (
         <div className="ac-cli-only">
@@ -525,7 +537,7 @@ function AccountCard({
                 </span>
               ) : null}
               {c.perHour != null ? (
-                <span title={`Weekly points left of its ${c.budget?.label.toLowerCase() ?? "budget"} per hour until it resets: the limit that runs out first, counting claims`}>
+                <span title={`Weekly points left of its ${c.budget?.label.toLowerCase() ?? "budget"} per hour until ${c.endsAt != null && !(c.budget?.resetsAt != null && c.budget.resetsAt > now && c.budget.resetsAt < c.endsAt) ? "its subscription ends" : "it resets"}: the limit that runs out first, counting claims`}>
                   {" "}
                   · {c.perHour.toFixed(2)} wk/h left
                   {c.budget && c.budget.id !== weeklyId
@@ -553,6 +565,7 @@ function AccountCard({
 
       {login ? <LoginPanel login={login} onDismiss={() => onDismissLogin(login.id)} /> : null}
       {rekey ? <NewKey account={a} onClose={() => setRekey(false)} /> : null}
+      {ending ? <Ends account={a} onClose={() => setEnding(false)} /> : null}
 
       <footer className="ac-foot">
         <a className="btn btn-ghost btn-sm" data-nav-enter href={hrefOf({ page: "accounts", sub: "insights", account: a.id })}>
@@ -576,6 +589,11 @@ function AccountCard({
             }
           >
             Log in again
+          </Button>
+        )}
+        {keyed || pooled || a.endsAt != null ? null : (
+          <Button size="sm" variant="ghost" icon={Icon.clock} disabled={busy} title="Its subscription was cancelled: say when it ends" onClick={() => setEnding(true)}>
+            Not renewing
           </Button>
         )}
         {sharable ? (
@@ -997,6 +1015,91 @@ function NewKey({ account: a, onClose }: { account: AccountView; onClose: () => 
           <Button onClick={onClose}>Cancel</Button>
           <Button type="submit" variant="primary" icon={Icon.key} loading={busy} disabled={!key.trim()}>
             Replace key
+          </Button>
+        </div>
+      </form>
+    </Modal>
+  );
+}
+
+/** "Nov 21, 10:47 AM" */
+function fmtEnd(at: number): string {
+  return new Date(at).toLocaleString([], { month: "short", day: "numeric", hour: "numeric", minute: "2-digit" });
+}
+
+/** A time's day as a date input holds it. */
+function dayOf(at: number): string {
+  const d = new Date(at);
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+}
+
+/** The next end of a monthly period of a plan begun at `since`: that day of
+ *  the month at that time, or a shorter month's last day. */
+function nextPeriodEnd(since: number, now: number): number {
+  const s = new Date(since);
+  const n = new Date(now);
+  for (let i = 0; ; i++) {
+    const month = n.getUTCMonth() + i;
+    const last = new Date(Date.UTC(n.getUTCFullYear(), month + 1, 0)).getUTCDate();
+    const at = Date.UTC(n.getUTCFullYear(), month, Math.min(s.getUTCDate(), last), s.getUTCHours(), s.getUTCMinutes());
+    if (at > now) return at;
+  }
+}
+
+/**
+ * When a subscription that will not renew ends. No provider tells a CLI's
+ * login that its plan was cancelled, so you say; the day offered is the end
+ * of the monthly period it is in, by the day it began. The time of day is
+ * that one's too: a plan ends at the minute it began, not at midnight.
+ */
+function Ends({ account: a, onClose }: { account: AccountView; onClose: () => void }) {
+  const guess = a.subscribedAt ? nextPeriodEnd(a.subscribedAt, Date.now()) : null;
+  const like = a.endsAt ?? guess;
+  const [day, setDay] = useState(like === null ? "" : dayOf(like));
+  const { run, busy, error } = useAction();
+  const save = (endsAt: number | null) =>
+    void run(async () => {
+      await api.patchAccount(a.id, { endsAt });
+      onClose();
+    });
+  const at = () => {
+    const [y, m, d] = day.split("-").map(Number);
+    const t = like === null ? null : new Date(like);
+    return new Date(y!, m! - 1, d!, t?.getHours() ?? 23, t?.getMinutes() ?? 59).getTime();
+  };
+  return (
+    <Modal
+      title={`${a.label} is not renewing`}
+      hint="What is left of its limits is lost when it ends, so new sessions go to it ahead of the accounts that renew, and none after."
+      onClose={onClose}
+    >
+      <form
+        className="acs-form"
+        onSubmit={(e) => {
+          e.preventDefault();
+          if (day) save(at());
+        }}
+      >
+        <Field
+          label="Its subscription ends"
+          hint={
+            guess !== null && a.endsAt == null
+              ? `A guess: ${fmtEnd(guess)} ends the month it is in, by the day it was started. Its billing page has the day it really ends.`
+              : "The day its billing page says the plan ends."
+          }
+        >
+          <input autoFocus type="date" value={day} onChange={(e) => setDay(e.target.value)} />
+        </Field>
+        {error ? <p className="error-line">{error}</p> : null}
+        <div className="modal-actions">
+          {a.endsAt != null ? (
+            <Button disabled={busy} onClick={() => save(null)}>
+              It renews after all
+            </Button>
+          ) : null}
+          <Button onClick={onClose}>Cancel</Button>
+          <Button type="submit" variant="primary" icon={Icon.clock} loading={busy} disabled={!day}>
+            Save
           </Button>
         </div>
       </form>
