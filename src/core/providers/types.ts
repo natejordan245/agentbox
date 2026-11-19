@@ -319,6 +319,8 @@ export interface SpawnOptions {
 }
 
 export interface ResumeOptions {
+  /** Connect Claude in Chrome (claude: `--chrome`); such a session is never hosted. */
+  chrome?: boolean;
   account: Account;
   /** See `SpawnOptions.session`. */
   session: string;

@@ -582,7 +582,7 @@ export const hostSocket = (session: string): string => join(agentboxHome(), "ses
  * stays in the TUI, whose prompts the fleet reads off its screen.
  */
 function hosting(cmd: Command, session: string, hosted: boolean | undefined): Command {
-  if (!hosted || !cmd.argv.includes("--dangerously-skip-permissions")) return cmd;
+  if (!hosted || cmd.argv.includes("--chrome") || !cmd.argv.includes("--dangerously-skip-permissions")) return cmd;
   const sock = hostSocket(session);
   mkdirSync(dirname(sock), { recursive: true });
   return { ...cmd, argv: [process.execPath, join(packageRoot, "src", "core", "providers", "claude-host.ts"), ...cmd.argv], env: { ...cmd.env, AGENTBOX_CLAUDE_HOST: sock } };
@@ -645,11 +645,13 @@ function resumeCommand(opts: ResumeOptions): Command {
     // second would replace it.
     if (!setsFlag(opts.carry, "--append-system-prompt", "--append-system-prompt-file")) argv.push(...told(opts.briefingFile));
     if (!setsFlag(opts.carry, "--settings")) argv.push(...HOOKED);
+    if (opts.chrome && !setsFlag(opts.carry, "--chrome")) argv.push("--chrome");
   } else {
     if (opts.model) argv.push("--model", opts.model);
     if (opts.effort) argv.push("--effort", opts.effort);
     if (opts.autoApprove) argv.push("--dangerously-skip-permissions");
     argv.push(...THINKING, ...told(opts.briefingFile), ...HOOKED);
+    if (opts.chrome) argv.push("--chrome");
   }
   return { ...hosting({ argv, ...accountCommand(opts.account) }, opts.session, opts.hosted), stdinFile: opts.promptFile };
 }

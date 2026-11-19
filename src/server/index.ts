@@ -1238,6 +1238,14 @@ const router = new Router(mapError)
     const b = await readBody(req);
     return json({ takenBack: await fleet.interrupt(params.id!, b.takeBack === true) });
   })
+  .add("POST", "/api/sessions/:id/chrome", async ({ req, params }) => {
+    const b = await readBody(req);
+    if (typeof b.on !== "boolean") throw new HttpError(400, "on must be true or false");
+    const s = await fleet.setChrome(params.id!, b.on);
+    scheduleHot();
+    scheduleCold();
+    return json(s);
+  })
   .add("POST", "/api/sessions/:id/model", async ({ req, params }) => {
     const b = await readBody(req);
     const model = requireString(b, "model").trim();

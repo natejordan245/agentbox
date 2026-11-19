@@ -43,6 +43,7 @@ import { FolderSimple } from "@phosphor-icons/react/dist/csr/FolderSimple";
 import { Image } from "@phosphor-icons/react/dist/csr/Image";
 import { PencilSimple } from "@phosphor-icons/react/dist/csr/PencilSimple";
 import { TerminalWindow } from "@phosphor-icons/react/dist/csr/TerminalWindow";
+import { GoogleChromeLogo } from "@phosphor-icons/react/dist/csr/GoogleChromeLogo";
 import { MagnifyingGlass } from "@phosphor-icons/react/dist/csr/MagnifyingGlass";
 import { PuzzlePiece } from "@phosphor-icons/react/dist/csr/PuzzlePiece";
 import { ArrowBendUpLeft } from "@phosphor-icons/react/dist/csr/ArrowBendUpLeft";
@@ -124,6 +125,7 @@ export const Icon = {
   image: icon(Image),
   edit: icon(PencilSimple),
   terminal: icon(TerminalWindow),
+  chrome: icon(GoogleChromeLogo),
   search: icon(MagnifyingGlass),
   extension: icon(PuzzlePiece),
   move: icon(ArrowBendUpLeft),

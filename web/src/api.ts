@@ -311,6 +311,7 @@ export const api = {
   /** Put it on another model: a stopped session records it for its next resume,
    *  a running one is restarted on it. */
   setModel: (id: string, model: string) => post<Session>(`/api/sessions/${enc(id)}/model`, { model }),
+  setChrome: (id: string, on: boolean) => post<Session>(`/api/sessions/${enc(id)}/chrome`, { on }),
   adopt: (id: string) => post<Session>(`/api/sessions/${enc(id)}/adopt`),
   /** Continue on another account (`auto` = the balancer's pick), sending `prompt`. */
   move: (id: string, opts: { accountId?: string; prompt?: string }) => post<Session>(`/api/sessions/${enc(id)}/move`, opts),

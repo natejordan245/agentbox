@@ -776,6 +776,21 @@ function Detail({
                 {TAB_LABEL[t]}
               </button>
             ))}
+            {session.provider === "claude" && session.host !== "subagent" && session.host !== "external" ? (
+              <Button
+                size="sm"
+                variant="ghost"
+                icon={Icon.chrome}
+                aria-pressed={!!session.chrome}
+                disabled={busy}
+                title={session.chrome
+                  ? "Claude in Chrome is on: it runs in Claude's TUI. Click to turn it off (restarts it when idle)."
+                  : "Turn on Claude in Chrome for this session (restarts it when idle, in Claude's TUI)."}
+                onClick={() => void run(() => api.setChrome(session.id, !session.chrome))}
+              >
+                Chrome {session.chrome ? "on" : "off"}
+              </Button>
+            ) : null}
           </div>
           {narrow ? null : <SessionIdentity session={session} sessions={state.sessions} run={run} busy={busy} />}
           <div className="sx-tabbar-actions">

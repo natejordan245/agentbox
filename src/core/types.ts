@@ -761,6 +761,8 @@ export interface Session {
   /** Started with `notify: false` (POST /api/sessions): a stop of it is not
    *  pushed to your phone. The board still shows it. */
   quiet?: boolean;
+  /** Runs with Claude in Chrome, in Claude's TUI (`SessionRecord.chrome`). */
+  chrome?: boolean;
   /**
    * When the fleet stopped its process for sitting idle. A parked session is
    * still shown as `waiting` — it is still your move — and the next message

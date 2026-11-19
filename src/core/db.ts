@@ -557,6 +557,8 @@ const MIGRATIONS: readonly string[] = [
   // 48 — when an account's subscription ends, for one that will not renew
   // (`Account.endsAt`).
   `ALTER TABLE accounts ADD COLUMN ends_at INTEGER;`,
+  // 49 — a session run with Claude in Chrome (`SessionRecord.chrome`).
+  `ALTER TABLE sessions ADD COLUMN chrome INTEGER;`,
 ];
 
 function migrate(d: Database) {
@@ -790,13 +792,16 @@ export interface SessionRecord {
   bookmarkedAt?: number | null;
   /** Started with `notify: false`: its stops are not pushed. */
   quiet?: boolean;
+  /** Run with Claude in Chrome (`--chrome`), in Claude's TUI: a headless
+   *  Claude has no /chrome to reconnect a browser that dropped. */
+  chrome?: boolean;
   /** Whose accounts it runs on (docs/org.md): the org's pool, or yours. */
   scope: Scope;
 }
 
 const SESSION_SHAPE: Shape = {
   json: new Set(["facts", "launch", "parkedMates"]),
-  bool: new Set(["parentByHand", "quiet"]),
+  bool: new Set(["parentByHand", "quiet", "chrome"]),
 };
 
 function rowToRecord(r: Row): SessionRecord {

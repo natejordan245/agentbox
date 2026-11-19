@@ -2582,6 +2582,7 @@ export class Fleet extends EventEmitter {
       pinOrder: rec.pinOrder ?? null,
       bookmarkedAt: rec.bookmarkedAt ?? null,
       ...(rec.quiet ? { quiet: true } : {}),
+      ...(rec.chrome ? { chrome: true } : {}),
       parkedAt: host === "none" ? (rec.parkedAt ?? null) : null,
       parkHold: host === "tmux" ? (this.parkHolds.get(rec.id) ?? null) : null,
       background: background && status === "running",
@@ -3564,6 +3565,39 @@ export class Fleet extends EventEmitter {
    * picker no remote here can drive. Mid-turn is refused: the turn in flight
    * is the old model's, and stopping it would throw that work away.
    */
+  /** Turn Claude in Chrome on or off for a Claude session. One that runs is
+   *  restarted on its conversation, since the CLI takes `--chrome` only at launch. */
+  setChrome(id: string, on: boolean): Promise<Session> {
+    return this.serial(id, async () => {
+      const rec = getSessionRecord(id);
+      if (!rec) throw new FleetError(404, `no session ${id}`);
+      if (rec.provider !== "claude") throw new FleetError(409, "Claude in Chrome is Claude's");
+      if (!!rec.chrome === on) return this.get(id);
+      const view = this.get(id);
+      if (view.host === "subagent") throw this.callersAgent(view);
+      if (view.host === "external") throw new FleetError(409, "running in another terminal — adopt it first");
+      if (!rec.tmux || !(await this.paneAlive(rec.tmux))) {
+        updateSessionRecord(id, { chrome: on });
+        await this.tick();
+        return this.get(id);
+      }
+      if (view.status === "running") throw new FleetError(409, "it is mid-turn; interrupt it first");
+      if (view.status === "blocked") throw new FleetError(409, "it is waiting on a prompt; answer it or interrupt it first");
+      if (!rec.agentSessionId) throw new FleetError(409, "this session never started a conversation");
+      const account = this.accountFor(rec, view);
+      if (!account) throw new FleetError(409, "this session's account is no longer set up");
+      const cwd = await this.resumeDir(rec);
+      const next = { ...rec, chrome: on };
+      // Built before the stop: a launch that cannot be built leaves it running as it was.
+      const prepared = this.resumeLaunch(next, account, cwd);
+      await this.stopAndWait(rec, view);
+      updateSessionRecord(id, { chrome: on });
+      await this.startTmux(next, account, cwd, undefined, prepared);
+      await this.tick();
+      return this.get(id);
+    });
+  }
+
   switchModel(id: string, model: string): Promise<Session> {
     return this.serial(id, async () => {
       const rec = getSessionRecord(id);
@@ -3654,6 +3688,7 @@ export class Fleet extends EventEmitter {
       ...(resumeOn(rec) ? { model: resumeOn(rec)! } : {}),
       autoApprove: getSettings().autoApprove,
       hosted: getSettings().claudeHeadless,
+      ...(rec.chrome ? { chrome: true } : {}),
       ...(launch ? { carry: launch.args } : {}),
     };
     const resumed = adapter.resumeCommand(opts);
